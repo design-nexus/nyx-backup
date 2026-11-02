@@ -177,7 +177,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "backup-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "nyx-core 0.1.0 (git+https://github.com/design-nexus/nyx-core.git?rev=9dc196245bbf0ccc93b8bf04ac61bb476b85e4d5)",
@@ -189,7 +189,7 @@ dependencies = [
 
 [[package]]
 name = "backup-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "backup-core",
@@ -204,12 +204,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "backup-service"
-version = "0.1.0"
+name = "backup-restore"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "backup-core",
  "backup-engine",
+ "backup-system",
+ "libc",
+ "nyx-core 0.1.0 (git+https://github.com/design-nexus/nyx-core.git?rev=9dc196245bbf0ccc93b8bf04ac61bb476b85e4d5)",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "similar",
+ "walkdir",
+]
+
+[[package]]
+name = "backup-service"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "backup-core",
+ "backup-engine",
+ "backup-restore",
  "backup-system",
  "clap",
  "libc",
@@ -224,7 +242,7 @@ dependencies = [
 
 [[package]]
 name = "backup-system"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "backup-core",
@@ -1643,11 +1661,12 @@ dependencies = [
 
 [[package]]
 name = "nyx-backup"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "backup-core",
  "backup-engine",
+ "backup-restore",
  "backup-service",
  "backup-system",
  "gtk4",
@@ -2442,6 +2461,12 @@ dependencies = [
  "errno",
  "libc",
 ]
+
+[[package]]
+name = "similar"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
 
 [[package]]
 name = "slab"

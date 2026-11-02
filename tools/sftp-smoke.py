@@ -96,6 +96,15 @@ keep_last = 2
  backup=call('backup','sftp-fixture','--wait');assert backup['state']=='success',backup
  assert call('verify','sftp-fixture','--full','--wait')['state']=='success'
  assert len(call('history','sftp-fixture')['result'])==1
+ snapshot=call('restore','snapshots','sftp-fixture')[0]['id']
+ planned=call('restore','plan','sftp-fixture',snapshot,'--path',root/'source/file','--target',root/'app-restored','--wait')
+ assert planned['state']=='success',planned
+ plan=call('restore','inspect','sftp-fixture',planned['result']['plan'])
+ applied=call('restore','apply','sftp-fixture',plan['id'],'--confirm',plan['id'],'--wait')
+ assert applied['state']=='success',applied
+ assert pathlib.Path(plan['entries'][0]['target']).read_text()=='SFTP-only fixture\n'
+ assert call('restore','rollback','sftp-fixture',plan['id'],'--confirm',plan['id'],'--wait')['state']=='success'
+
  password_command='secret-tool lookup application nyx-backup account sftp-fixture kind repository'
  run('restic','--repo',f'sftp:nyx-backup-fixture:{root}/remote/repository','--password-command',password_command,'restore','latest','--target',root/'restored')
  restored=root/'restored'/str(root/'source/file').lstrip('/')
@@ -108,7 +117,7 @@ keep_last = 2
  server.terminate();server.wait(timeout=5)
  disconnected=call('destination','sftp-fixture','test',check=False)
  assert 'error' in disconnected and not (root/'remote/absent').exists()
- print(json.dumps({'fixture':str(root),'passed':['SFTP-only connection probe without shell access','existing SSH configuration and host-key verification','explicit repository initialization','encrypted backup','full-data verification','snapshot history','native Restic restore contents and mode 0640','missing repository validation never initializes','disconnected transport reports failure']},indent=2))
+ print(json.dumps({'fixture':str(root),'passed':['SFTP-only connection probe without shell access','existing SSH configuration and host-key verification','explicit repository initialization','encrypted backup','full-data verification','snapshot history','native Restic restore contents and mode 0640','missing repository validation never initializes','disconnected transport reports failure','application selective SFTP restore and rollback']},indent=2))
 finally:
  if worker is not None:
   worker.terminate()

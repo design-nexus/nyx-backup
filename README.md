@@ -1,6 +1,6 @@
 # Nyx Backup
 
-A Rust/GTK4 desktop app for encrypted Restic backups of **selected user data and readable system metadata**. Standard Restic tools can read its repositories. Phase 1 is unprivileged and makes no complete-system, boot-recovery or cross-PC recovery claim.
+A Rust/GTK4 desktop app for encrypted Restic backups of **selected user data and readable system metadata**. Standard Restic tools can read its repositories. The app is unprivileged and makes no complete-system, boot-recovery or cross-PC recovery claim. Phase 2 adds staged selective restoration, dotfile diffs, conflict handling and rollback.
 
 The interface has Overview, Backups, Restore and Settings. Backup and repository-administration jobs belong to an on-demand systemd user service, so closing the window does not stop them. Scheduling and retention deletion require explicit action.
 
@@ -19,13 +19,15 @@ Headless libraries and CLI/service build with `cargo build --locked` (the defaul
 
 ```sh
 cargo fmt --all --check
-cargo test --locked -p backup-engine
+cargo test --locked -p backup-engine -p backup-restore
 # Disposable private-bus/keyring integration test; never selects real user data:
 python3 tools/smoke.py
 # Private-bus activation and a disposable transient user timer:
 python3 tools/service-smoke.py
 # Loopback SFTP-only server, private SSH config and disposable data:
 python3 tools/sftp-smoke.py
+# Full selected-file restore/diff/conflict/rollback qualification:
+python3 tools/restore-smoke.py
 ```
 
 The smoke test requires built release binaries, `gnome-keyring-daemon`, `gdbus`, and native Restic. It retains its private temporary fixture for inspection. See [qualification](docs/QUALIFICATION.md) for evidence and limits.
@@ -75,7 +77,9 @@ Schedules are systemd calendar expressions; a saved calendar alone does not enab
 
 ## Recovery and limitations
 
-Phase 1 does not restore files through the app. Use native Restic and the separately retained recovery password to restore into a new folder. Example (the password is prompted by Restic):
+Use the Restore page to browse profile-owned snapshots, select files/folders, prepare a separate-folder restore plan, review diffs and conflicts, and confirm applying it. Quick Dotfiles Restore uses original current-user configuration paths only after explicit review. Existing files are skipped by default; keep-both and replace-with-rollback are available. Restore receipts retain originals and refuse changed rollback targets. See the [full restore workflow and CLI](docs/RESTORE.md).
+
+Native Restic also works with the same repositories and recovery password:
 
 ```sh
 restic --repo /path/to/repository snapshots
@@ -85,5 +89,7 @@ restic --repo /path/to/repository restore SNAPSHOT_ID --target /new/empty/recove
 For SMB, use the encrypted Rclone config and its Secret Service password command as documented in [security](docs/SECURITY.md), or configure a standard Rclone SMB remote separately. SFTP uses existing SSH configuration and agent/identity authentication.
 
 Cancellation also interrupts file-source preparation before Restic starts. A cancelled or interrupted backup can be started again incrementally. This reuses stored repository content; it does not resume at an exact byte offset. Backup never removes uncertain Restic locks. Inspect the repository and confirm no worker is using it before using native Restic maintenance tools.
+
+The app restores contents, symlinks, modes and modification times; ownership, ACLs, extended attributes and hard-link topology are not applied. Private staging and recovery copies are retained. Close apps before replacing their configuration.
 
 See [architecture/API](docs/ARCHITECTURE.md), [security](docs/SECURITY.md), [capabilities and roadmap](docs/ROADMAP.md), and [Restic recovery documentation](https://restic.readthedocs.io/en/stable/050_restore.html).

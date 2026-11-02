@@ -52,3 +52,14 @@ The remaining client-lifetime limitation has been removed: initialization, repos
 - Locked release build, formatting and whitespace checks: **passed**. The GUI displays preparation and indeterminate job states without inventing a percentage.
 
 Phase 1 implementation is complete. Qualification limits remain explicit: SMB/NFS endpoints, physical unplug/reboot/power-loss behavior and GUI interaction/visual review are unverified. Persistent schedule enable/disable was not exercised in the live user configuration. Complete-system, cross-PC and boot recovery remain later phases with no qualifying VM evidence. No real user sources or NAS credentials were used.
+
+## Phase 2 complete: selective restoration (2026-11-02)
+
+Delivered as version 0.2.0: snapshot browsing, selected file/folder restoration, staged review, Quick Dotfiles Restore, text diffs, skip/keep-both/replace policies, restore receipts and explicit rollback. These run through the private local service channel; the integration D-Bus API still rejects restoration.
+
+- Focused checks: **7 restore tests plus 11 existing engine tests passed**. Restore tests cover original preservation, rollback, post-preview edits, rollback conflicts, an interrupted original-file move recovered from its journal, symlink ancestors, skip defaults, cancellation and invalid path/confirmation requests.
+- `python3 tools/restore-smoke.py`: **passed** against native Restic with a private session bus, keyring, home and disposable repository. Proved snapshot browsing; preview without target writes; selected restore contents and mode 0640; literal glob filenames; symlinks and empty folders; skip/keep-both/replace behavior; changed-after-preview refusal; actual Quick Dotfiles Restore/diff/rollback; preservation of post-restore edits and originals; explicit credential authorization; traversal/symlink/confirmation guards; deterministic stalled-child process-group cancellation; receipts; profile ownership for snapshots/receipts; filesystem-root refusal; no restored text or secrets in ordinary job journals; and D-Bus refusal of restore operations.
+- `python3 tools/sftp-smoke.py`: **passed**, extended to app-driven selective restore and rollback through the disposable SFTP-only endpoint, in addition to native recovery and Phase 1 transport checks.
+- Locked workspace release build, formatting, fixture syntax and whitespace checks: **passed**. Headless restoration is a separate domain crate. Existing GTK Dialog deprecation and upstream future-compatibility warnings remain.
+
+Coverage is explicit: contents, symlinks, ordinary mode bits and modification times. Ownership, ACLs, xattrs and hard-link topology are not applied. GUI visual/interaction review, SMB/NFS restore endpoints, physical failure modes and host power-loss recovery remain unverified. The GUI is not opened or restarted during delivery. No real user file sources or live NAS credentials were used.

@@ -328,6 +328,22 @@ fn repo_args(store: &Store, d: &Destination) -> Result<Vec<String>> {
     }
     Ok(a)
 }
+/// Configured repository access for application-owned domain operations.
+/// Callers must hold RepoLock and must supply fixed Restic operations.
+pub fn restic_command(store: &Store, c: &Config, p: &Profile) -> Result<std::process::Command> {
+    let destination = c.destination(&p.destination)?;
+    validate_destination(destination)?;
+    let _password = password(&destination.id)?;
+    let mut command = clean_command("restic");
+    command.args(repo_args(store, destination)?);
+    Ok(command)
+}
+pub fn contains_recognized_secrets(path: &Path) -> bool {
+    recognized_secret(path)
+}
+pub fn contains_recognized_store(path: &Path) -> bool {
+    recognized_store(path)
+}
 pub struct RepoLock(fs::File);
 impl RepoLock {
     pub fn acquire(store: &Store) -> Result<Self> {

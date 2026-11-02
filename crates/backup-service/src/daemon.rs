@@ -35,6 +35,7 @@ impl Api {
         operation: &str,
         c: &Connection,
         require_approved: bool,
+        restore: Option<backup_restore::Request>,
     ) -> zbus::fdo::Result<String> {
         let config = self.store.load().map_err(failure)?;
         let p = config.profile(id).map_err(failure)?.clone();
@@ -71,9 +72,15 @@ impl Api {
                 }
             };
             emit(&job);
-            if let Err(e) = backup_engine::execute_locked(
-                check, &store, &config, &p, &operation, cancel, &mut job, emit,
-            ) {
+            let result = match restore {
+                Some(request) => backup_restore::execute_locked(
+                    check, &store, &config, &p, request, cancel, &mut job, emit,
+                ),
+                None => backup_engine::execute_locked(
+                    check, &store, &config, &p, &operation, cancel, &mut job, emit,
+                ),
+            };
+            if let Err(e) = result {
                 job.state = JobState::Failed;
                 job.finished = Some(now());
                 job.message = e.to_string();
@@ -173,7 +180,7 @@ impl Api {
                 "Operation is not exposed by this API".into(),
             ));
         }
-        self.launch(id, operation, c, true)
+        self.launch(id, operation, c, true, None)
     }
     async fn cancel(
         &self,
@@ -207,26 +214,55 @@ async fn handle_admin(
         stream.peer_cred()?.uid() == unsafe { libc::geteuid() },
         "Same-user access required"
     );
-    let mut reader = tokio::io::BufReader::new(stream.take(4096));
+    let mut reader = tokio::io::BufReader::new(stream.take(512 * 1024));
     let mut line = String::new();
     tokio::time::timeout(
         std::time::Duration::from_secs(5),
         reader.read_line(&mut line),
     )
     .await??;
-    let result = (|| -> anyhow::Result<String> {
+    let result = async {
         let request: backup_service::AdminRequest = serde_json::from_str(&line)?;
         request.validate()?;
         anyhow::ensure!(
             request.configuration == backup_service::configuration_file(&api.store),
             "Client and service use different configurations; refusing repository administration"
         );
-        api.launch(&request.profile, &request.operation, c, false)
-            .map_err(Into::into)
-    })();
+        if let Some(restore) = &request.restore {
+            if !restore.is_job() {
+                let store = api.store.clone();
+                let profile = request.profile.clone();
+                let restore = restore.clone();
+                let value =
+                    tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
+                        let config = store.load()?;
+                        let p = config.profile(&profile)?;
+                        backup_restore::read(&store, &config, p, &restore)
+                    })
+                    .await??;
+                return Ok::<_, anyhow::Error>(serde_json::json!({"version":1,"result":value}));
+            }
+        }
+        let id = api.launch(
+            &request.profile,
+            &request.operation,
+            c,
+            false,
+            request.restore,
+        )?;
+        Ok(serde_json::json!({"version":1,"job":id}))
+    }
+    .await;
     let response = match result {
-        Ok(job) => serde_json::json!({"version":1,"job":job}),
+        Ok(value) => value,
         Err(e) => serde_json::json!({"version":1,"error":e.to_string()}),
+    };
+    let response = response.to_string();
+    let response = if response.len() > 16 * 1024 * 1024 {
+        serde_json::json!({"version":1,"error":"Restore result too large; browse a smaller folder"})
+            .to_string()
+    } else {
+        response
     };
     let mut stream = reader.into_inner().into_inner();
     tokio::time::timeout(

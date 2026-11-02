@@ -1,9 +1,10 @@
+mod restore_ui;
 use backup_core::*;
 use gtk::{gio, glib, prelude::*};
 use nyx_ui::{chrome, settings_card, widgets as w};
 use std::{
     cell::{Cell, RefCell},
-    path::PathBuf,
+    path::{Path, PathBuf},
     rc::Rc,
 };
 const SHORTCUTS: &[(&[&str], &str)] = &[
@@ -67,6 +68,7 @@ struct Ui {
     stack: gtk::Stack,
     profiles: gtk::Box,
     destinations: gtk::Box,
+    restore: gtk::Box,
     health: gtk::Label,
     last: gtk::Label,
     next: gtk::Label,
@@ -324,6 +326,7 @@ fn refresh(ui: &Rc<Ui>) {
     };
     clear(&ui.profiles);
     clear(&ui.destinations);
+    restore_ui::refresh(ui);
     if c.profiles.is_empty() {
         ui.profiles.append(&card("Create your first backup","Add a destination in Settings, then select the folders to protect. Nothing is backed up until you start an approved profile."));
     }
@@ -1154,14 +1157,12 @@ fn build(app: &gtk::Application) {
     let jobs = w::labeled_button("document-open-recent-symbolic", "Job history");
     b.append(&jobs);
     stack.add_named(&backups, Some("backups"));
-    let (restore, b) = page("Restore", "Phase 1 repositories remain readable by Restic.");
-    b.append(&card("Recovery available through Restic","Use Restic with your repository location and recovery password to list snapshots and restore into a separate empty folder. Backup does not expose restore or destructive recovery through its integration API."));
-    b.append(&card("Planned","Snapshot browsing, selective restore, Quick Dotfiles Restore, conflict handling and rollback arrive in Phase 2. System recovery and bootable recovery remain later phases until demonstrated in a VM."));
-    let docs = gtk::LinkButton::with_label(
-        "https://restic.readthedocs.io/en/stable/050_restore.html",
-        "Open Restic recovery documentation",
+    let (restore, b) = page(
+        "Restore",
+        "Browse snapshots, review selected files and keep a reversible restore receipt.",
     );
-    b.append(&docs);
+    let restore_content = w::vbox(12);
+    b.append(&restore_content);
     stack.add_named(&restore, Some("restore"));
     let (settings_page, b) = page("Settings", "Manage destinations and security.");
     let add_dest = w::labeled_button("list-add-symbolic", "New destination");
@@ -1201,6 +1202,7 @@ fn build(app: &gtk::Application) {
         stack: stack.clone(),
         profiles,
         destinations,
+        restore: restore_content,
         health,
         last,
         next,
@@ -1450,10 +1452,20 @@ fn build(app: &gtk::Application) {
                                 .set_text(&format!("{} · {}", j.profile, j.operation));
                             if let Some(fraction) = j.progress["percent_done"].as_f64() {
                                 ui.progress.set_fraction(fraction.clamp(0.0, 1.0));
+                                let detail = if let Some(bytes) = j.progress["bytes_done"].as_u64()
+                                {
+                                    format!("{bytes} bytes processed")
+                                } else if let Some(files) = j.progress["files_done"].as_u64() {
+                                    format!(
+                                        "{files} / {} files",
+                                        j.progress["total_files"].as_u64().unwrap_or(files)
+                                    )
+                                } else {
+                                    "Working…".into()
+                                };
                                 ui.progress.set_text(Some(&format!(
-                                    "{:.0}% · {} bytes processed",
-                                    fraction * 100.0,
-                                    j.progress["bytes_done"].as_u64().unwrap_or(0)
+                                    "{:.0}% · {detail}",
+                                    fraction * 100.0
                                 )));
                             } else {
                                 ui.progress.pulse();

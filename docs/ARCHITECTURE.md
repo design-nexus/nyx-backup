@@ -6,9 +6,10 @@ Rust 2024 workspace with independent domain crates:
 - `backup-system`: Secret Service through public `nyx-sync` helpers; Rclone SMB configuration encryption; mount identity and NFS management; readable system metadata; explicit user schedules and notifications.
 - `backup-engine`: a common selection walker for preview/execution, Restic argument arrays and JSON progress, cancellation, app worker lock, exit-state mapping and reconciliation.
 - `backup-service`: versioned session D-Bus API, approved-profile execution, CLI administration and a systemd-owned daemon.
+- `backup-restore`: profile-owned snapshot browsing, private staging/verification, exact plans, content diffs, descriptor-relative file replacement, conflict policies and rollback journals.
 - `apps/backup`: GTK4 0.11, pinned Nyx Core/Design 2.0 widgets, theme engine and icon system. Blocking work stays off the GTK thread.
 
-Restore/hardware crates do not exist until those capabilities work. No Settings engine, Core Control destructive API, `omarchy-backup` replacement, global watcher or setup integration is introduced.
+The restore crate is now delivered in Phase 2. A hardware crate remains deferred until its functionality works. No Settings engine, Core Control destructive API, `omarchy-backup` replacement, global watcher or setup integration is introduced.
 
 Configuration: `$XDG_CONFIG_HOME/nyx-backup/config.toml`; encrypted per-destination SMB files in `rclone/`; GUI theme preferences in `appearance.json`. State: `$XDG_STATE_HOME/nyx-backup/jobs/ID.json`, metadata under `metadata/PROFILE/system.json`, and a process-held `worker.lock`. Cache: `$XDG_CACHE_HOME/nyx-backup/restic`. Parent app directories are 0700; ordinary app files are 0600. Atomic writes reuse `nyx-core`'s synced rename implementation.
 
@@ -38,3 +39,9 @@ Explicit local initialization, validation and retention also run in the same dae
 All repository jobs survive the initiating client closing. File-source selection checks cancellation during traversal and active-store inspection, and cancellation before Restic starts records a cancelled result without running a repository command. Preparation and indeterminate operations appear as preparing/working states; Restic backup JSON supplies measured progress once available. Dispatch transfers the held admission lock into the worker rather than releasing/reacquiring it. A rejected busy local operation does not publish a phantom running job. Startup leaves jobs alone when a live process owns the application lock; stale jobs are reconciled once it is free.
 
 The future Control Center status contract is `Health` v1: coverage, active job/progress, last successful backup, next schedule information and available actions. Timer status is sourced from `systemctl --user list-timers --all --output=json`. The Control Center widget is deferred. Destination connection testing is separate from bound-mount status; status does not silently connect a remote or initialize a repository.
+
+## Local restoration protocol
+
+The private local request accepts a typed `restore` payload. Read-only actions (snapshot history/browse, plan/receipt inspection, diff and rollback preview) return bounded results directly; plaintext diffs are never inserted into a job journal. Plan preparation, apply and rollback are admitted as background jobs with the same held operation lock, cancellation and job-change signals. Requests are tied to the same configuration context and UID as other local administration. Apply and rollback require exact plan-ID confirmation. D-Bus `Start` retains its original allowlist and rejects every restore operation. `Capabilities.restore` still describes integration exposure (`false`); `local_restore` and `local_restore_operations` describe explicit local functionality.
+
+Plans pin an exact owned snapshot, selected archive paths, target mapping, conflict policy and fingerprints. Apply uses staged data and current target checks. Intent and retained-original locations are synced before replacement; no-replace renames protect concurrent target creation. Rollback consults both the journal and filesystem, retaining changed files and recovery copies on conflict. See RESTORE.md for metadata, concurrency, storage and filesystem limits.

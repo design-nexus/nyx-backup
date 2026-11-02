@@ -17,6 +17,10 @@ struct Args {
 #[derive(Subcommand)]
 enum Cmd {
     Capabilities,
+    Restore {
+        #[command(subcommand)]
+        action: RestoreCmd,
+    },
     Status,
     Inventory,
     Jobs,
@@ -96,6 +100,170 @@ enum Cmd {
     },
 }
 #[derive(Subcommand)]
+enum RestoreCmd {
+    Snapshots {
+        profile: String,
+    },
+    Browse {
+        profile: String,
+        snapshot: String,
+        #[arg(long, default_value = "/")]
+        directory: String,
+    },
+    Plan {
+        profile: String,
+        snapshot: String,
+        #[arg(long = "path", required = true)]
+        paths: Vec<String>,
+        #[arg(long, conflicts_with = "original_dotfiles")]
+        target: Option<PathBuf>,
+        #[arg(long)]
+        original_dotfiles: bool,
+        #[arg(long,default_value="skip",value_parser=["skip","keep-both","replace"])]
+        policy: String,
+        #[arg(long)]
+        include_secrets: bool,
+        #[arg(long)]
+        wait: bool,
+    },
+    Inspect {
+        profile: String,
+        plan: String,
+    },
+    Receipts {
+        profile: String,
+    },
+    Diff {
+        profile: String,
+        plan: String,
+        path: String,
+    },
+    Apply {
+        profile: String,
+        plan: String,
+        #[arg(long)]
+        confirm: String,
+        #[arg(long)]
+        wait: bool,
+    },
+    RollbackPreview {
+        profile: String,
+        plan: String,
+    },
+    Rollback {
+        profile: String,
+        plan: String,
+        #[arg(long)]
+        confirm: String,
+        #[arg(long)]
+        wait: bool,
+    },
+}
+fn restore_command(action: &RestoreCmd) -> Result<serde_json::Value> {
+    use backup_restore::{Mode, Policy, Request};
+    let (profile, request, wait) = match action {
+        RestoreCmd::Snapshots { profile } => (profile, Request::Snapshots, false),
+        RestoreCmd::Browse {
+            profile,
+            snapshot,
+            directory,
+        } => (
+            profile,
+            Request::Browse {
+                snapshot: snapshot.clone(),
+                directory: directory.clone(),
+            },
+            false,
+        ),
+        RestoreCmd::Plan {
+            profile,
+            snapshot,
+            paths,
+            target,
+            original_dotfiles,
+            policy,
+            include_secrets,
+            wait,
+        } => (
+            profile,
+            Request::Plan {
+                snapshot: snapshot.clone(),
+                paths: paths.clone(),
+                target: target.clone(),
+                mode: if *original_dotfiles {
+                    Mode::OriginalDotfiles
+                } else {
+                    Mode::Separate
+                },
+                policy: match policy.as_str() {
+                    "replace" => Policy::Replace,
+                    "keep-both" => Policy::KeepBoth,
+                    _ => Policy::Skip,
+                },
+                include_secrets: *include_secrets,
+            },
+            *wait,
+        ),
+        RestoreCmd::Inspect { profile, plan } => {
+            (profile, Request::Inspect { plan: plan.clone() }, false)
+        }
+        RestoreCmd::Receipts { profile } => (profile, Request::Receipts, false),
+        RestoreCmd::Diff {
+            profile,
+            plan,
+            path,
+        } => (
+            profile,
+            Request::Diff {
+                plan: plan.clone(),
+                path: path.clone(),
+            },
+            false,
+        ),
+        RestoreCmd::Apply {
+            profile,
+            plan,
+            confirm,
+            wait,
+        } => (
+            profile,
+            Request::Apply {
+                plan: plan.clone(),
+                confirmation: confirm.clone(),
+            },
+            *wait,
+        ),
+        RestoreCmd::RollbackPreview { profile, plan } => (
+            profile,
+            Request::RollbackPreview { plan: plan.clone() },
+            false,
+        ),
+        RestoreCmd::Rollback {
+            profile,
+            plan,
+            confirm,
+            wait,
+        } => (
+            profile,
+            Request::Rollback {
+                plan: plan.clone(),
+                confirmation: confirm.clone(),
+            },
+            *wait,
+        ),
+    };
+    if request.is_job() {
+        let id = backup_service::restore_start(profile, request)?;
+        if wait {
+            backup_service::wait_job(&id)
+        } else {
+            Ok(serde_json::json!({"job":id}))
+        }
+    } else {
+        backup_service::restore_read(profile, request)
+    }
+}
+#[derive(Subcommand)]
 enum ConfigCmd {
     Show,
     Import { path: PathBuf },
@@ -172,8 +340,9 @@ fn main() {
     match run(&args) {
         Ok(v) => {
             println!("{}", serde_json::to_string_pretty(&v).unwrap());
-            if v.get("state")
-                .is_some_and(|s| s != "success" && s != "running")
+            if v.get("operation").is_some()
+                && v.get("state")
+                    .is_some_and(|s| s != "success" && s != "running")
             {
                 std::process::exit(1)
             }
@@ -195,6 +364,7 @@ fn run(a: &Args) -> Result<serde_json::Value> {
     let parse = |s: String| -> Result<serde_json::Value> { Ok(serde_json::from_str(&s)?) };
     match &a.command {
         Cmd::Capabilities => Ok(backup_service::capabilities()),
+        Cmd::Restore { action } => restore_command(action),
         Cmd::Status => parse(backup_service::status()?),
         Cmd::Jobs => parse(backup_service::client_call("Jobs", ())?),
         Cmd::Inventory => Ok(inventory()),
