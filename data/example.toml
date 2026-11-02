@@ -1,0 +1,19 @@
+version = 1
+notifications = true
+
+[[destinations]]
+id = "local"
+name = "Backup drive"
+type = "local"
+path = "/replace/with/backup/repository"
+
+[[profiles]]
+id = "personal"
+name = "Personal data"
+destination = "local"
+sources = ["/replace/with/Documents"]
+exclusions = []
+include_secrets = false
+approved = false
+keep_last = 7
+schedule = "daily"

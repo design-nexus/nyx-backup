@@ -1,0 +1,87 @@
+# Nyx Backup
+
+A Rust/GTK4 desktop app for encrypted Restic backups of **selected user data and readable system metadata**. Standard Restic tools can read its repositories. Phase 1 is unprivileged and makes no complete-system, boot-recovery or cross-PC recovery claim.
+
+The interface has Overview, Backups, Restore and Settings. Backup jobs belong to an on-demand systemd user service, so closing the window does not stop a backup. Scheduling and retention deletion require explicit action.
+
+## Install and develop
+
+Requires Linux, Rust (2024 edition), GTK4 ≥4.18, Restic, Rclone, `secret-tool`, a session Secret Service, D-Bus and systemd user services. SSH supplies SFTP authentication; NFS mounting requires an administrator's existing user-mountable fstab entry. No root helper or lingering is installed.
+
+```sh
+cargo build --release --locked --workspace
+./install.sh --skip-build
+```
+
+Installation includes `nyx-backup`, `nyx-backupctl`, `nyx-backupd` in `~/.local/bin`, the launcher/icon in XDG data directories, D-Bus activation, and the user service. It does not launch the GUI, enable timers or restart an existing instance. `./install.sh` also builds. Shared dependencies use immutable published revisions.
+
+Headless libraries and CLI/service build with `cargo build --locked` (the default workspace members exclude GTK). The GUI lives in `apps/backup`; domain crates live in `crates/backup-{core,system,engine,service}`.
+
+```sh
+cargo fmt --all --check
+cargo test --locked -p backup-engine
+# Disposable private-bus/keyring integration test; never selects real user data:
+dbus-run-session -- python3 tools/smoke.py
+# Private-bus activation and a disposable transient user timer:
+python3 tools/service-smoke.py
+```
+
+The smoke test requires built release binaries, `gnome-keyring-daemon`, `gdbus`, and native Restic. It retains its private temporary fixture for inspection. See [qualification](docs/QUALIFICATION.md) for evidence and limits.
+
+## First backup
+
+1. Add a destination in Settings. For a mounted drive, choose **Mounted external storage**, which records mount identity and filesystem UUID. A local folder has no removable-device protection.
+2. Save the repository password in Secret Service, or generate one for a new repository. For SMB, also save the NAS credential, which creates an encrypted, private Rclone configuration.
+3. Create a profile, select absolute source paths, review exclusions, and preview. The folder and configuration pickers make selections explicit. Recognized caches, trash, secrets, database/VM stores, Backup's working files and all configured repository destinations are outside defaults. Build folders are retained.
+4. Test connectivity, then validate an existing repository **or** explicitly initialize a new repository. Connection failures never trigger initialization.
+5. Approve the profile and start a backup. Use snapshot history and verification to inspect results. Export the recovery password explicitly to a new file and keep it separately.
+
+Any file can contain secrets. The recognized-key authorization checkbox permits recognized credential paths; it cannot identify all sensitive data. Active database/VM detection is best effort. Stop applications or select consistent exports. Symlinks are saved as links, not followed. Preview reports logical file bytes, not compressed network transfer size. Unreadable selections produce an incomplete result, not success.
+
+## CLI
+
+CLI output is JSON; `--json` also makes errors machine-readable. Secrets are prompted without echo, or read from stdin with `--stdin`; there are no password arguments. `data/example.toml` documents the profile format.
+
+```sh
+nyx-backupctl inventory
+nyx-backupctl config import ./my-config.toml
+nyx-backupctl password local --generate
+nyx-backupctl export-password local /chosen/new/recovery-password.txt
+nyx-backupctl destination local test
+nyx-backupctl destination local validate personal
+# Only for a new repository; never a connection repair:
+nyx-backupctl destination local init personal --confirm
+nyx-backupctl preview personal
+nyx-backupctl approve personal
+nyx-backupctl backup personal --wait
+nyx-backupctl history personal
+nyx-backupctl stats personal
+nyx-backupctl verify personal --full --wait
+nyx-backupctl status
+nyx-backupctl jobs
+nyx-backupctl cancel JOB_ID
+nyx-backupctl schedule personal --enable
+nyx-backupctl schedule personal --disable
+nyx-backupctl retention personal
+# Review the preview before explicitly deleting snapshots:
+nyx-backupctl retention personal --apply --confirm-profile personal
+```
+
+`destination ID bind` records the current mount identity for an existing local destination. `destination ID connect` / `disconnect` manages only preconfigured NFS mounts. `smb-password ID` sets NAS credentials. Edit sources, exclusions, schedule and retention in the app or import TOML. `config show`, `profiles`, `destinations`, `job ID`, `schedules` and `capabilities` support automation. A waiting CLI exits nonzero on failed, incomplete, cancelled or interrupted jobs.
+
+Schedules are systemd calendar expressions; a saved calendar alone does not enable a timer. Timers use the same approved-profile service path as manual backups. The user manager must be active and Secret Service accessible; lingering is never enabled. Retention is manual, filters both `nyx-backup` and `profile:ID` tags, keeps at least one snapshot, and does not automatically prune repository data.
+
+## Recovery and limitations
+
+Phase 1 does not restore files through the app. Use native Restic and the separately retained recovery password to restore into a new folder. Example (the password is prompted by Restic):
+
+```sh
+restic --repo /path/to/repository snapshots
+restic --repo /path/to/repository restore SNAPSHOT_ID --target /new/empty/recovery-folder
+```
+
+For SMB, use the encrypted Rclone config and its Secret Service password command as documented in [security](docs/SECURITY.md), or configure a standard Rclone SMB remote separately. SFTP uses existing SSH configuration and agent/identity authentication.
+
+A cancelled or interrupted backup can be started again incrementally. This reuses stored repository content; it does not resume at an exact byte offset. Backup never removes uncertain Restic locks. Inspect the repository and confirm no worker is using it before using native Restic maintenance tools.
+
+See [architecture/API](docs/ARCHITECTURE.md), [security](docs/SECURITY.md), [capabilities and roadmap](docs/ROADMAP.md), and [Restic recovery documentation](https://restic.readthedocs.io/en/stable/050_restore.html).

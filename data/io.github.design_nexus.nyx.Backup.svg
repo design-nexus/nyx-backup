@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#26262a"/><stop offset="1" stop-color="#121214"/></linearGradient>
+    <radialGradient id="glow" cx=".2" cy=".1" r=".9"><stop stop-color="#90dfbf" stop-opacity=".22"/><stop offset="1" stop-color="#90dfbf" stop-opacity="0"/></radialGradient>
+    <linearGradient id="ink" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#90dfbf"/><stop offset="1" stop-color="#40ac88"/></linearGradient>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#tile)"/>
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#glow)"/>
+  <rect x="8.5" y="8.5" width="111" height="111" rx="27.5" fill="none" stroke="#90dfbf" stroke-opacity=".3"/>
+  <path d="M38 30h52a8 8 0 0 1 8 8v48a8 8 0 0 1-8 8H38a8 8 0 0 1-8-8V38a8 8 0 0 1 8-8z" fill="#90dfbf" fill-opacity=".35"/>
+  <path d="M32 46h64v40a8 8 0 0 1-8 8H40a8 8 0 0 1-8-8z" fill="url(#ink)"/>
+  <path d="M45 67a20 20 0 1 1 1 17M45 56v12h12M66 62v13l8 5" fill="none" stroke="#151517" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

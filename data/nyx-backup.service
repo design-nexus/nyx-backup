@@ -1,0 +1,12 @@
+[Unit]
+Description=Nyx Backup background service
+[Service]
+Type=dbus
+BusName=io.github.design_nexus.nyx.Backup1
+ExecStart=@BIN@/nyx-backupd
+KillMode=control-group
+TimeoutStopSec=15
+UMask=0077
+NoNewPrivileges=true
+[Install]
+WantedBy=default.target

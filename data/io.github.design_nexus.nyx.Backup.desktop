@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Nyx Backup
+Comment=Encrypted backups of selected user data
+Exec=nyx-backup
+Icon=io.github.design_nexus.nyx.Backup
+Terminal=false
+Categories=System;Archiving;Utility;
+StartupNotify=true

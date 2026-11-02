@@ -1,0 +1,19 @@
+[package]
+name = "nyx-backup"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+backup-core.workspace = true
+backup-system.workspace = true
+backup-engine.workspace = true
+backup-service.workspace = true
+nyx-core = { workspace = true, features = ["gtk"] }
+nyx-sync.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+gtk = { package = "gtk4", version = "0.11", features = ["v4_18"] }
+nyx-ui = { git = "https://github.com/design-nexus/nyx-design.git", rev = "230278515fbd78ea51667e8f980bf0c234e8946c" }
+nyx-theme = { git = "https://github.com/design-nexus/nyx-design.git", rev = "230278515fbd78ea51667e8f980bf0c234e8946c" }
+nyx-icons = { git = "https://github.com/design-nexus/nyx-design.git", rev = "230278515fbd78ea51667e8f980bf0c234e8946c" }
