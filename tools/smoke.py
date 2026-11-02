@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
-"""Disposable integration proof. Run under dbus-run-session; never reads user files."""
+"""Disposable integration proof with its own private bus; never reads user files."""
 import json,os,pathlib,subprocess,sys,tempfile,time,stat,fcntl
 repo=pathlib.Path(__file__).resolve().parents[1]
-# Only fixture source paths enter profiles. Secret Service runs on this private bus.
-root=pathlib.Path(tempfile.mkdtemp(prefix='nyx-backup-smoke-'))
+# Establish XDG paths before launching the bus so activation can never select
+# the installed user's service/configuration during a worker-restart race.
+if len(sys.argv)==1:
+ fixture=pathlib.Path(tempfile.mkdtemp(prefix='nyx-backup-smoke-'))
+ environment=os.environ.copy();environment['NYX_SMOKE_ROOT']=str(fixture)
+ for key,name in [('HOME','home'),('XDG_CONFIG_HOME','config'),('XDG_DATA_HOME','data'),('XDG_STATE_HOME','state'),('XDG_CACHE_HOME','cache'),('XDG_RUNTIME_DIR','runtime')]:
+  (fixture/name).mkdir(mode=0o700,exist_ok=True)
+  environment[key]=str(fixture/name)
+ for key in ['DISPLAY','WAYLAND_DISPLAY','GNOME_KEYRING_CONTROL','SSH_AUTH_SOCK']:environment.pop(key,None)
+ raise SystemExit(subprocess.call(['dbus-run-session','--',sys.executable,__file__,'inner'],env=environment))
+root=pathlib.Path(os.environ['NYX_SMOKE_ROOT'])
 for name in ['config','state','cache','data','home','runtime','source/.cache','source/.ssh','source/build','source/repository']:(root/name).mkdir(parents=True,exist_ok=True)
 os.chmod(root/'runtime',0o700)
 os.environ.update(HOME=str(root/'home'),XDG_CONFIG_HOME=str(root/'config'),XDG_STATE_HOME=str(root/'state'),XDG_CACHE_HOME=str(root/'cache'),XDG_DATA_HOME=str(root/'data'),XDG_RUNTIME_DIR=str(root/'runtime'))
@@ -70,9 +79,16 @@ domain = ""
 call('config','import',root/'fixture.toml')
 call('smb-password','smb-fixture','--stdin',input='fixture-only-nas-password\n')
 encrypted=root/'config/nyx-backup/rclone/smb-fixture.conf'
-assert encrypted.read_text().startswith('RCLONE_ENCRYPT_V0:') and 'fixture-only-nas-password' not in encrypted.read_text()
+assert 'RCLONE_ENCRYPT_V0:' in encrypted.read_text() and 'fixture-only-nas-password' not in encrypted.read_text()
 decoded=cmd('rclone','--config',encrypted,'--password-command','secret-tool lookup application nyx-backup account smb-fixture kind rclone','--ask-password=false','config','dump')
 assert json.loads(decoded.stdout)['nas']['type']=='smb'
+# Editing the visible server must not silently use the previous encrypted target.
+(root/'fixture.toml').write_text(smb_config.replace('server = "127.0.0.1"','server = "edited-fixture-server"'))
+call('config','import',root/'fixture.toml')
+mismatch=call('destination','smb-fixture','test',ok=False)
+assert 'error' in mismatch and 'settings changed' in mismatch['error'],mismatch
+(root/'fixture.toml').write_text(smb_config);call('config','import',root/'fixture.toml')
+
 # Failed SMB credential updates must preserve the existing encrypted config/key.
 original_ciphertext=encrypted.read_bytes()
 original_unlock=cmd('secret-tool','lookup','application','nyx-backup','account','smb-fixture','kind','rclone').stdout
@@ -90,7 +106,18 @@ assert cmd('rclone','--config',encrypted,'--password-command','secret-tool looku
 activation=root/'data/dbus-1/services';activation.mkdir(parents=True)
 (activation/'io.github.design_nexus.nyx.Backup1.service').write_text(f'[D-BUS Service]\nName=io.github.design_nexus.nyx.Backup1\nExec={daemon}\n')
 # A bus may cache activation directories before XDG_DATA_HOME changes. Spawn here if so.
+def await_listener(worker):
+ import socket
+ for _ in range(100):
+  if worker.poll() is not None:raise AssertionError(worker.stderr.read())
+  for path in (root/'runtime/nyx-backup').glob('admin-*.sock'):
+   with socket.socket(socket.AF_UNIX) as stream:
+    try:stream.connect(str(path));return
+    except (ConnectionRefusedError,FileNotFoundError):pass
+  time.sleep(.05)
+ raise AssertionError('Worker did not expose its private administration listener')
 worker=subprocess.Popen([str(daemon)],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True)
+await_listener(worker)
 try:
  for _ in range(100):
   p=cmd(ctl,'capabilities',ok=False)
@@ -100,6 +127,22 @@ try:
   time.sleep(.05)
  else:raise AssertionError('Service failed to register')
  preview=call('preview','fixture');assert preview['files']==2,preview
+ # Exercise the private local-administration listener directly, with bounded JSON.
+ import socket
+ sockets=list((root/'runtime/nyx-backup').glob('admin-*.sock'))
+ assert len(sockets)==1,sockets
+ assert stat.S_IMODE(sockets[0].stat().st_mode)==0o600
+ assert stat.S_IMODE(sockets[0].parent.stat().st_mode)==0o700
+ def admin_request(operation,confirmation=None):
+  request={'version':1,'profile':'fixture','operation':operation,'confirm_profile':confirmation,'configuration':str(root/'config/nyx-backup/config.toml')}
+  with socket.socket(socket.AF_UNIX) as stream:
+   stream.settimeout(5);stream.connect(str(sockets[0]));stream.sendall((json.dumps(request)+'\n').encode());stream.shutdown(socket.SHUT_WR)
+   response=b''
+   while data:=stream.recv(4096):response+=data
+  return json.loads(response)
+ assert 'error' in admin_request('retention-apply'), 'Retention must require exact-profile confirmation'
+ assert 'error' in admin_request('restore'), 'Local administration must reject restoration and arbitrary commands'
+
  init=call('destination','fixture','init','fixture','--confirm')
  assert init['state']=='success',init
  first=call('backup','fixture','--wait');assert first['state']=='success',first
@@ -119,6 +162,10 @@ try:
  retention=call('retention','fixture');assert retention['state']=='success'
  # Two tagged snapshots still exist after a retention preview.
  assert len(call('history','fixture')['result'])==2
+ # The administration request connection closes immediately; the service owns the job.
+ detached=admin_request('validate')['job']
+ assert wait(detached)['state']=='success'
+
  call('retention','fixture','--apply','--confirm-profile','fixture')
  assert len(call('history','fixture')['result'])==1
  # A second caller cannot enter while the application lock is held.
@@ -150,6 +197,7 @@ try:
     if b'restic\0' in command and str(root).encode() in command:os.killpg(int(proc.name),15)
    except (OSError,ProcessLookupError):pass
  worker=subprocess.Popen([str(daemon)],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True)
+ await_listener(worker)
  for _ in range(100):
   p=cmd(ctl,'job',job,'--json',ok=False)
   if p.stdout and json.loads(p.stdout).get('state')=='interrupted':break
@@ -163,7 +211,7 @@ try:
  assert time.monotonic()-lock_check_started<5, 'Locked credential lookup must not wait for an unlock prompt'
  state=''.join(p.read_text() for p in (root/'state/nyx-backup/jobs').glob('*.json'))+(root/'config/nyx-backup/config.toml').read_text()
  assert 'fixture-only-recovery-password' not in state and 'disposable-fixture-unlock' not in state
- print(json.dumps({'fixture':str(root),'passed':['initial and incremental snapshots','shared selection rules','native restore contents and permissions','metadata/full verification','retention preview and scoped deletion','worker concurrency','partial read result','cancellation','API restrictions','approval enforcement','interrupted-job reconciliation','locked credentials','no secrets in state','normalized source exclusions','failed SMB credential update preserves access']},indent=2))
+ print(json.dumps({'fixture':str(root),'passed':['initial and incremental snapshots','shared selection rules','native restore contents and permissions','metadata/full verification','retention preview and scoped deletion','worker concurrency','partial read result','cancellation','API restrictions','approval enforcement','interrupted-job reconciliation','locked credentials','no secrets in state','normalized source exclusions','failed SMB credential update preserves access','service-owned administration after client disconnect','local administration operation and confirmation restrictions','SMB server/account binding before connectivity']},indent=2))
 finally:
  worker.terminate()
  try:worker.wait(timeout=10)

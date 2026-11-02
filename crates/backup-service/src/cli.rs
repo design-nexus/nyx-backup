@@ -155,7 +155,16 @@ fn direct(
     if let Some(d) = dest {
         ensure!(p.destination == d, "Profile uses a different destination");
     }
-    Ok(serde_json::to_value(backup_engine::run(store, c, p, op)?)?)
+    let _ = store;
+    backup_service::admin_run(
+        &p.id,
+        op,
+        if op == "retention-apply" {
+            Some(&p.id)
+        } else {
+            None
+        },
+    )
 }
 fn main() {
     backup_core::init();

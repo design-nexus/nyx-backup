@@ -2,7 +2,7 @@
 
 A Rust/GTK4 desktop app for encrypted Restic backups of **selected user data and readable system metadata**. Standard Restic tools can read its repositories. Phase 1 is unprivileged and makes no complete-system, boot-recovery or cross-PC recovery claim.
 
-The interface has Overview, Backups, Restore and Settings. Backup jobs belong to an on-demand systemd user service, so closing the window does not stop a backup. Scheduling and retention deletion require explicit action.
+The interface has Overview, Backups, Restore and Settings. Backup and repository-administration jobs belong to an on-demand systemd user service, so closing the window does not stop them. Scheduling and retention deletion require explicit action.
 
 ## Install and develop
 
@@ -21,7 +21,7 @@ Headless libraries and CLI/service build with `cargo build --locked` (the defaul
 cargo fmt --all --check
 cargo test --locked -p backup-engine
 # Disposable private-bus/keyring integration test; never selects real user data:
-dbus-run-session -- python3 tools/smoke.py
+python3 tools/smoke.py
 # Private-bus activation and a disposable transient user timer:
 python3 tools/service-smoke.py
 # Loopback SFTP-only server, private SSH config and disposable data:
@@ -33,7 +33,7 @@ The smoke test requires built release binaries, `gnome-keyring-daemon`, `gdbus`,
 ## First backup
 
 1. Add a destination in Settings. For a mounted drive, choose **Mounted external storage**, which records mount identity and filesystem UUID. A local folder has no removable-device protection.
-2. Save the repository password in Secret Service, or generate one for a new repository. For SMB, also save the NAS credential, which creates an encrypted, private Rclone configuration.
+2. Save the repository password in Secret Service, or generate one for a new repository. For SMB, also save the NAS credential, which creates an encrypted, private Rclone configuration bound to that server/account. After editing those settings, set the SMB credential again to confirm the new target. Older configurations without this binding require the same explicit confirmation.
 3. Create a profile, select absolute source paths, review exclusions, and preview. The folder and configuration pickers make selections explicit. Recognized caches, trash, secrets, database/VM stores, Backup's working files and all configured repository destinations are outside defaults. Build folders are retained.
 4. Test connectivity, then validate an existing repository **or** explicitly initialize a new repository. Connection failures never trigger initialization.
 5. Approve the profile and start a backup. Use snapshot history and verification to inspect results. Export the recovery password explicitly to a new file and keep it separately.
@@ -84,6 +84,6 @@ restic --repo /path/to/repository restore SNAPSHOT_ID --target /new/empty/recove
 
 For SMB, use the encrypted Rclone config and its Secret Service password command as documented in [security](docs/SECURITY.md), or configure a standard Rclone SMB remote separately. SFTP uses existing SSH configuration and agent/identity authentication.
 
-A cancelled or interrupted backup can be started again incrementally. This reuses stored repository content; it does not resume at an exact byte offset. Backup never removes uncertain Restic locks. Inspect the repository and confirm no worker is using it before using native Restic maintenance tools.
+Cancellation also interrupts file-source preparation before Restic starts. A cancelled or interrupted backup can be started again incrementally. This reuses stored repository content; it does not resume at an exact byte offset. Backup never removes uncertain Restic locks. Inspect the repository and confirm no worker is using it before using native Restic maintenance tools.
 
 See [architecture/API](docs/ARCHITECTURE.md), [security](docs/SECURITY.md), [capabilities and roadmap](docs/ROADMAP.md), and [Restic recovery documentation](https://restic.readthedocs.io/en/stable/050_restore.html).

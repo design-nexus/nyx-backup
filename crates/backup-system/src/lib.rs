@@ -95,6 +95,29 @@ fn checked(mut c: Command, what: &str) -> Result<Vec<u8>> {
 pub fn rclone_config(store: &Store, id: &str) -> PathBuf {
     store.config.join("rclone").join(format!("{id}.conf"))
 }
+fn smb_binding(d: &Destination) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let DestinationKind::Smb {
+        server,
+        username,
+        domain,
+        ..
+    } = &d.kind
+    else {
+        anyhow::bail!("Select an SMB destination")
+    };
+    let digest = Sha256::digest(serde_json::to_vec(&(server, username, domain))?);
+    Ok(format!("# Nyx Backup SMB target v1: {digest:x}"))
+}
+pub fn validate_smb_config(store: &Store, d: &Destination) -> Result<()> {
+    let config =
+        fs::read_to_string(rclone_config(store, &d.id)).context("Set up SMB credentials first")?;
+    ensure!(
+        config.lines().next() == Some(smb_binding(d)?.as_str()),
+        "SMB server or account settings changed. Set up SMB credentials again before using this destination."
+    );
+    Ok(())
+}
 pub fn setup_smb(store: &Store, d: &Destination, secret: &Secret) -> Result<()> {
     let DestinationKind::Smb {
         server,
@@ -156,7 +179,8 @@ pub fn setup_smb(store: &Store, d: &Destination, secret: &Secret) -> Result<()> 
     atomic(
         &rclone_config(store, &d.id),
         format!(
-            "RCLONE_ENCRYPT_V0:\n{}\n",
+            "{}\nRCLONE_ENCRYPT_V0:\n{}\n",
+            smb_binding(d)?,
             base64::engine::general_purpose::STANDARD.encode(data)
         ),
     )?;
@@ -164,10 +188,7 @@ pub fn setup_smb(store: &Store, d: &Destination, secret: &Secret) -> Result<()> 
 }
 pub fn rclone(store: &Store, d: &Destination) -> Result<Command> {
     valid_id(&d.id)?;
-    ensure!(
-        rclone_config(store, &d.id).exists(),
-        "Set up SMB credentials first"
-    );
+    validate_smb_config(store, d)?;
     ensure_secret_unlocked(&d.id, "rclone")?;
     let mut c = clean_command("rclone");
     c.args(["--config"]).arg(rclone_config(store, &d.id)).args([

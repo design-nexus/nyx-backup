@@ -86,13 +86,13 @@ keep_last = 2
  assert shell.returncode!=0
  assert call('destination','sftp-fixture','test')['connected']
  assert not (root/'remote/repository').exists()
- initialized=call('destination','sftp-fixture','init','sftp-fixture','--confirm');assert initialized['state']=='success',initialized
  worker=subprocess.Popen([str(daemon)],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True)
  for _ in range(50):
   status=run(ctl,'status','--json',check=False)
   if status.returncode==0:break
   if worker.poll() is not None:raise AssertionError(worker.stderr.read())
   time.sleep(.05)
+ initialized=call('destination','sftp-fixture','init','sftp-fixture','--confirm');assert initialized['state']=='success',initialized
  backup=call('backup','sftp-fixture','--wait');assert backup['state']=='success',backup
  assert call('verify','sftp-fixture','--full','--wait')['state']=='success'
  assert len(call('history','sftp-fixture')['result'])==1

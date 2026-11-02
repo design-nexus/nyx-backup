@@ -10,7 +10,7 @@ This records actual evidence separately from implemented source. No real user so
 - Physical drive removal, service crashes during filesystem sync, host reboot/power loss and large-data performance remain unverified.
 - Complete-system, hardware migration and boot recovery are planned, with no qualifying VM recovery evidence.
 
-Final command results and fixture evidence are added after validation.
+The results below record the completed checks and their limits.
 
 ## Recorded results (2026-11-02)
 
@@ -40,3 +40,15 @@ The locked workspace release build, formatting and diff checks passed after this
 - Installation includes all three binaries, launcher and icon. Only the idle background service is restarted to load these safety changes; the GUI is not opened or restarted.
 
 SMB/NFS endpoint qualification, physical unplug races and GUI interaction/visual review remain unverified.
+
+## Phase 1 completion: job ownership and administration (2026-11-02)
+
+The remaining client-lifetime limitation has been removed: initialization, repository validation, retention preview and explicitly confirmed retention application now execute in the daemon. Local GUI/CLI requests use a private Unix socket with kernel peer-UID checks, strict operation allowlisting, exact-profile retention confirmation, matching configuration context, bounded messages and timeouts. Integration D-Bus methods still expose no initialization, deletion, credentials, destination mutation or restoration.
+
+- Focused domain checks: **11 passed**, including deterministic cancellation during source traversal, cancellation before credential lookup/Restic startup, admission-lock ownership through terminal reporting, no phantom jobs on busy rejection and preservation of a live worker during reconciliation.
+- `python3 tools/smoke.py`: **passed**. Includes ordinary initial/incremental backup, full verification, native restoration and permission checks, source safety, concurrency, cancellation, interrupted-job reconciliation, locked credentials, encrypted Rclone interoperability, failed credential-update preservation, server/account binding before any SMB connection, private socket permissions, denied local operations/confirmation and administration continuing after client disconnect.
+- `python3 tools/service-smoke.py`: **passed** for activation, generated unit syntax and transient timer → CLI → approved profile → Restic.
+- `python3 tools/sftp-smoke.py`: **passed** for SFTP-only connectivity, service-owned initialization, encrypted backup, full verification, history, native restore and absent/disconnected destination refusal.
+- Locked release build, formatting and whitespace checks: **passed**. The GUI displays preparation and indeterminate job states without inventing a percentage.
+
+Phase 1 implementation is complete. Qualification limits remain explicit: SMB/NFS endpoints, physical unplug/reboot/power-loss behavior and GUI interaction/visual review are unverified. Persistent schedule enable/disable was not exercised in the live user configuration. Complete-system, cross-PC and boot recovery remain later phases with no qualifying VM evidence. No real user sources or NAS credentials were used.

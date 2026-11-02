@@ -74,7 +74,30 @@ fn active_marker(path: &Path) -> bool {
     let s = path.file_name().unwrap_or_default().to_string_lossy();
     s.ends_with("-wal") || s == "postmaster.pid" || s == "mongod.lock"
 }
+#[derive(Debug)]
+struct PreparationCancelled;
+impl std::fmt::Display for PreparationCancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Cancelled during preparation")
+    }
+}
+impl std::error::Error for PreparationCancelled {}
+fn check_cancel(cancel: &AtomicBool) -> Result<()> {
+    if cancel.load(Ordering::SeqCst) {
+        return Err(PreparationCancelled.into());
+    }
+    Ok(())
+}
 pub fn select(store: &Store, c: &Config, p: &Profile) -> Result<Selection> {
+    select_with_check(store, c, p, || Ok(()))
+}
+fn select_with_check(
+    store: &Store,
+    c: &Config,
+    p: &Profile,
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<Selection> {
+    check()?;
     let d = c.destination(&p.destination)?;
     validate_destination(d)?;
     let mut builder = GlobSetBuilder::new();
@@ -101,6 +124,7 @@ pub fn select(store: &Store, c: &Config, p: &Profile) -> Result<Selection> {
     let mut seen = std::collections::HashSet::new();
     let mut scan_roots = Vec::new();
     for source in &p.sources {
+        check()?;
         let absolute = match fs::canonicalize(source) {
             Ok(path) => path,
             Err(_) if fs::symlink_metadata(source).is_ok_and(|m| m.file_type().is_symlink()) => {
@@ -174,6 +198,7 @@ pub fn select(store: &Store, c: &Config, p: &Profile) -> Result<Selection> {
             .into_iter()
             .filter_entry(|e| !excluded(e.path()));
         for e in walk {
+            check()?;
             let e = match e {
                 Ok(e) => e,
                 Err(_) => {
@@ -237,8 +262,10 @@ pub fn select(store: &Store, c: &Config, p: &Profile) -> Result<Selection> {
                 .bytes()
                 .all(|b| b.is_ascii_digit())
         }) {
+            check()?;
             if let Ok(fds) = fs::read_dir(proc.path().join("fd")) {
                 for fd in fds.flatten() {
+                    check()?;
                     if let Ok(path) = fs::read_link(fd.path()) {
                         if scan_roots.iter().any(|s| path.starts_with(s)) && recognized_store(&path)
                         {
@@ -283,10 +310,7 @@ fn repo_args(store: &Store, d: &Destination) -> Result<Vec<String>> {
         store.cache.join("restic").to_string_lossy().into_owned(),
     ];
     if matches!(d.kind, DestinationKind::Smb { .. }) {
-        ensure!(
-            rclone_config(store, &d.id).exists(),
-            "Set up SMB credentials first"
-        );
+        validate_smb_config(store, d)?;
         ensure_secret_unlocked(&d.id, "rclone")?;
         let q = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
         let command = format!(
@@ -324,7 +348,16 @@ impl Drop for RepoLock {
     }
 }
 pub fn reconcile(store: &Store) -> Result<()> {
-    let _guard = RepoLock::acquire(store)?;
+    let _guard = match RepoLock::acquire(store) {
+        Ok(guard) => guard,
+        Err(e)
+            if e.downcast_ref::<std::io::Error>()
+                .is_some_and(|e| e.kind() == std::io::ErrorKind::WouldBlock) =>
+        {
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+    };
     for mut j in store.jobs()? {
         if j.state == JobState::Running {
             j.state = JobState::Interrupted;
@@ -362,7 +395,10 @@ pub fn terminal_state(code: Option<i32>, cancel: bool, unreadable: u64) -> JobSt
         JobState::Failed
     }
 }
-pub fn execute(
+/// Run an operation using the admission lock already held by its dispatcher.
+/// Keeping ownership across thread handoff prevents another caller taking it.
+pub fn execute_locked(
+    lock: RepoLock,
     store: &Store,
     c: &Config,
     p: &Profile,
@@ -371,7 +407,31 @@ pub fn execute(
     job: &mut Job,
     mut changed: impl FnMut(&Job),
 ) -> Result<()> {
-    let _lock = RepoLock::acquire(store)?;
+    let _lock = lock;
+    let result = execute_inner(store, c, p, operation, &cancel, job, &mut changed);
+    match result {
+        Err(e) if e.is::<PreparationCancelled>() => {
+            job.state = JobState::Cancelled;
+            job.finished = Some(now());
+            job.message =
+                "Cancelled before Restic started. No repository operation was performed.".into();
+            store.write_job(job)?;
+            changed(job);
+            Ok(())
+        }
+        other => other,
+    }
+}
+fn execute_inner(
+    store: &Store,
+    c: &Config,
+    p: &Profile,
+    operation: &str,
+    cancel: &AtomicBool,
+    job: &mut Job,
+    changed: &mut impl FnMut(&Job),
+) -> Result<()> {
+    check_cancel(cancel)?;
     let d = c.destination(&p.destination)?;
     validate_destination(d)?;
     // Check availability before starting a child; never replace missing credentials.
@@ -388,7 +448,7 @@ pub fn execute(
             args.extend(["cat".into(), "config".into()]);
         }
         "backup" => {
-            let s = select(store, c, p)?;
+            let s = select_with_check(store, c, p, || check_cancel(cancel))?;
             ensure!(
                 s.preview.blocked.is_empty(),
                 "{}",
@@ -403,7 +463,10 @@ pub fn execute(
             let metadata_dir = store.state.join("metadata").join(&p.id);
             private_dir(&metadata_dir)?;
             let metadata_file = metadata_dir.join("system.json");
-            atomic(&metadata_file, serde_json::to_vec_pretty(&metadata())?)?;
+            check_cancel(cancel)?;
+            let system_metadata = metadata();
+            check_cancel(cancel)?;
+            atomic(&metadata_file, serde_json::to_vec_pretty(&system_metadata)?)?;
             entries.push(metadata_file);
             args.extend([
                 "backup".into(),
@@ -433,6 +496,10 @@ pub fn execute(
         }
         _ => anyhow::bail!("Unsupported operation"),
     }
+    check_cancel(cancel)?;
+    job.progress = serde_json::json!({"stage":"running"});
+    store.write_job(job)?;
+    changed(job);
     let mut command = clean_command("restic");
     command
         .args(args)
@@ -533,9 +600,11 @@ pub fn execute(
     Ok(())
 }
 pub fn run(store: &Store, c: &Config, p: &Profile, op: &str) -> Result<Job> {
+    let lock = RepoLock::acquire(store)?;
     let mut j = Job::new(&p.id, op);
     store.write_job(&j)?;
-    if let Err(e) = execute(
+    if let Err(e) = execute_locked(
+        lock,
         store,
         c,
         p,
@@ -711,6 +780,64 @@ mod fixture_tests {
                 .to_string()
                 .contains("different mount")
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn cancelling_preparation_never_needs_credentials_or_starts_restic() {
+        let (root, store, c, p) = fixture();
+        let mut checks = 0;
+        let error = select_with_check(&store, &c, &p, || {
+            checks += 1;
+            if checks == 4 {
+                Err(PreparationCancelled.into())
+            } else {
+                Ok(())
+            }
+        })
+        .err()
+        .unwrap();
+        assert!(error.is::<PreparationCancelled>());
+        assert_eq!(checks, 4);
+        let lock = RepoLock::acquire(&store).unwrap();
+        let mut job = Job::new(&p.id, "backup");
+        let mut changes = 0;
+        execute_locked(
+            lock,
+            &store,
+            &c,
+            &p,
+            "backup",
+            Arc::new(AtomicBool::new(true)),
+            &mut job,
+            |j| {
+                changes += 1;
+                assert_eq!(j.state, JobState::Cancelled);
+                assert!(
+                    RepoLock::acquire(&store).is_err(),
+                    "Admission lock must remain owned through terminal reporting"
+                );
+            },
+        )
+        .unwrap();
+        assert_eq!(changes, 1);
+        assert_eq!(store.job(&job.id).unwrap().state, JobState::Cancelled);
+        assert!(!root.join("repo").exists());
+        assert!(RepoLock::acquire(&store).is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn busy_local_operations_never_publish_phantom_jobs() {
+        let (root, store, c, p) = fixture();
+        let lock = RepoLock::acquire(&store).unwrap();
+        assert!(run(&store, &c, &p, "init").is_err());
+        assert!(store.jobs().unwrap().is_empty());
+        let running = Job::new(&p.id, "backup");
+        store.write_job(&running).unwrap();
+        reconcile(&store).unwrap();
+        assert_eq!(store.job(&running.id).unwrap().state, JobState::Running);
+        drop(lock);
+        reconcile(&store).unwrap();
+        assert_eq!(store.job(&running.id).unwrap().state, JobState::Interrupted);
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

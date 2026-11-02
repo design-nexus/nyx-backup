@@ -245,24 +245,46 @@ fn run_profile(ui: &Rc<Ui>, id: String, op: &str) {
         },
     );
 }
-fn local_operation(ui: &Rc<Ui>, id: String, operation: &str) {
+fn admin_operation(
+    ui: &Rc<Ui>,
+    id: String,
+    operation: &str,
+    done: impl FnOnce(&Rc<Ui>, serde_json::Value) + 'static,
+) {
     let op = operation.to_string();
     work(
         ui,
-        "Working with repository…",
+        "Starting repository job…",
         move || {
-            let store = Store::default();
-            let c = store.load()?;
-            let p = c.profile(&id)?;
-            let j = backup_engine::run(&store, &c, p, &op)?;
-            Ok(serde_json::to_string(&j)?)
+            backup_service::admin_start(
+                &id,
+                &op,
+                if op == "retention-apply" {
+                    Some(&id)
+                } else {
+                    None
+                },
+            )
         },
-        |ui, s| {
-            if let Ok(v) = serde_json::from_str(&s) {
-                message(ui, "Repository result", &outcome(&v));
-            }
+        move |ui, id| {
+            *ui.job.borrow_mut() = Some(id.clone());
+            ui.notice
+                .set_text("Repository job started. Closing this window leaves it running.");
+            let ui = ui.clone();
+            nyx_core::cmd::background(
+                move || backup_service::wait_job(&id),
+                move |result| match result {
+                    Ok(job) => done(&ui, job),
+                    Err(e) => message(&ui, "Repository job needs attention", &e.to_string()),
+                },
+            );
         },
     );
+}
+fn local_operation(ui: &Rc<Ui>, id: String, operation: &str) {
+    admin_operation(ui, id, operation, |ui, job| {
+        message(ui, "Repository result", &outcome(&job))
+    });
 }
 fn preview(ui: &Rc<Ui>, id: String) {
     work(
@@ -997,44 +1019,29 @@ fn schedule_dialog(ui: &Rc<Ui>, p: Profile) {
 }
 fn retention_dialog(ui: &Rc<Ui>, p: Profile) {
     let id = p.id.clone();
-    work(
-        ui,
-        "Previewing profile retention…",
-        move || {
-            let store = Store::default();
-            let c = store.load()?;
-            Ok(serde_json::to_string(&backup_engine::run(
-                &store,
-                &c,
-                c.profile(&id)?,
-                "retention-preview",
-            )?)?)
-        },
-        move |ui, s| {
-            let j: serde_json::Value = serde_json::from_str(&s).unwrap_or_default();
-            if j["state"] != "success" {
-                message(ui, "Retention preview failed", &outcome(&j));
-                return;
-            }
-            let d = dialog(&ui.window, "Review retention before deleting snapshots");
-            d.add_button("Cancel", gtk::ResponseType::Cancel);
-            d.add_button("Apply retention", gtk::ResponseType::Accept);
-            let b = form(&d);
-            b.append(&text(&format!("Profile: {}\nKeep {} snapshots. Only snapshots with this Backup profile's tags are eligible.\n\n{}",p.name,p.keep_last,outcome(&j)),""));
-            let confirmation = entry(&b, "Type the profile ID to confirm snapshot deletion", "");
-            let ui = ui.clone();
-            d.connect_response(move |d, r| {
-                if r == gtk::ResponseType::Accept {
-                    if confirmation.text() != p.id {
-                        return;
-                    }
-                    local_operation(&ui, p.id.clone(), "retention-apply");
+    admin_operation(ui, id, "retention-preview", move |ui, j| {
+        if j["state"] != "success" {
+            message(ui, "Retention preview failed", &outcome(&j));
+            return;
+        }
+        let d = dialog(&ui.window, "Review retention before deleting snapshots");
+        d.add_button("Cancel", gtk::ResponseType::Cancel);
+        d.add_button("Apply retention", gtk::ResponseType::Accept);
+        let b = form(&d);
+        b.append(&text(&format!("Profile: {}\nKeep {} snapshots. Only snapshots with this Backup profile's tags are eligible.\n\n{}",p.name,p.keep_last,outcome(&j)),""));
+        let confirmation = entry(&b, "Type the profile ID to confirm snapshot deletion", "");
+        let ui = ui.clone();
+        d.connect_response(move |d, r| {
+            if r == gtk::ResponseType::Accept {
+                if confirmation.text() != p.id {
+                    return;
                 }
-                d.close();
-            });
-            d.present();
-        },
-    );
+                local_operation(&ui, p.id.clone(), "retention-apply");
+            }
+            d.close();
+        });
+        d.present();
+    });
 }
 fn settings(ui: &Rc<Ui>) {
     settings_card::open(
@@ -1441,13 +1448,22 @@ fn build(app: &gtk::Application) {
                             *ui.job.borrow_mut() = Some(j.id);
                             ui.activity
                                 .set_text(&format!("{} · {}", j.profile, j.operation));
-                            let fraction = j.progress["percent_done"].as_f64().unwrap_or(0.0);
-                            ui.progress.set_fraction(fraction.clamp(0.0, 1.0));
-                            ui.progress.set_text(Some(&format!(
-                                "{:.0}% · {} bytes processed",
-                                fraction * 100.0,
-                                j.progress["bytes_done"].as_u64().unwrap_or(0)
-                            )));
+                            if let Some(fraction) = j.progress["percent_done"].as_f64() {
+                                ui.progress.set_fraction(fraction.clamp(0.0, 1.0));
+                                ui.progress.set_text(Some(&format!(
+                                    "{:.0}% · {} bytes processed",
+                                    fraction * 100.0,
+                                    j.progress["bytes_done"].as_u64().unwrap_or(0)
+                                )));
+                            } else {
+                                ui.progress.pulse();
+                                ui.progress
+                                    .set_text(Some(if j.progress["stage"] == "preparing" {
+                                        "Preparing…"
+                                    } else {
+                                        "Working…"
+                                    }));
+                            }
                         } else {
                             ui.progress.set_fraction(0.0);
                             ui.progress.set_text(Some("Idle"));
