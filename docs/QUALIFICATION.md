@@ -6,7 +6,7 @@ This records actual evidence separately from implemented source. No real user so
 - Focused domain checks cover terminal states (including Restic exit 3), source/exclusion behavior, retained build folders, source-inside-repository refusal, app-operation serialization, stale-job reconciliation, missing bound mounts and TOML round-trip.
 - `tools/smoke.py` uses a private D-Bus session and disposable Secret Service keyring. Its recorded result covers actual Restic operations and native restoration.
 - GUI opening/interaction and rendered visual review are not performed. Installation must not open or restart the app.
-- No disposable SMB, SFTP or NFS endpoint was available for runtime transport qualification. These transports are implemented, unverified. Native Rclone encrypted-config interoperability is tested independently from connectivity.
+- SFTP is qualified against a disposable loopback SFTP-only OpenSSH endpoint. SMB and NFS endpoints remain unverified. Native Rclone encrypted-config interoperability is tested independently from connectivity.
 - Physical drive removal, service crashes during filesystem sync, host reboot/power loss and large-data performance remain unverified.
 - Complete-system, hardware migration and boot recovery are planned, with no qualifying VM recovery evidence.
 
@@ -21,6 +21,12 @@ Final command results and fixture evidence are added after validation.
 - `python3 tools/service-smoke.py`: **passed**. Private-bus D-Bus activation, generated service/timer syntax, transient systemd user timer → CLI → approved profile → Restic, and persisted success after the scheduling client exits. Persistent enable/disable was deliberately not exercised in the real user's configuration. Runtime fixture timer/service units were stopped afterward.
 - Only fixture sources under temporary directories were selected. Fixtures remain local for inspection; none are shipped or configured as real profiles.
 
-No full-system, cross-PC or boot recovery claim is accepted. NAS endpoint behavior and GUI visual/interaction behavior remain unverified.
+No full-system, cross-PC or boot recovery claim is accepted. SMB/NFS endpoint behavior and GUI visual/interaction behavior remain unverified.
 
 Installation verification: all three installed binaries match the release SHA-256 values; the installed D-Bus activation returned Health v1 from the systemd-owned service. The service is on demand (not enabled at login); no Backup timers are installed/enabled in the live manager. The launcher validates and the canonical icon SVG parses. The GUI was not opened or restarted.
+
+## SFTP-only qualification (2026-11-02)
+
+`python3 tools/sftp-smoke.py`: **passed** against an unprivileged loopback OpenSSH server restricted to `internal-sftp`, with ephemeral client/host keys, strict host-key checking, private SSH configuration and a private Secret Service/D-Bus session. Confirmed the old remote-shell probe fails for this account; the corrected SFTP subsystem probe succeeds without creating a repository. Explicit initialization, encrypted backup, full-data verification, snapshot history and native Restic restoration succeeded, with matching contents and file mode 0640. Missing repository validation and disconnected transport checks failed without initializing a replacement. No real SSH configuration, data or NAS credentials were used.
+
+The locked workspace release build, formatting and diff checks passed after this change. Updated binaries, launcher and icon were installed without opening or restarting the GUI.

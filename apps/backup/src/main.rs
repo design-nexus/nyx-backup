@@ -368,9 +368,17 @@ fn refresh(ui: &Rc<Ui>) {
         ui.profiles.append(&row);
     }
     for d in c.destinations {
-        let status = match backup_system::validate_destination(&d) {
-            Ok(_) => "Mount identity available; connection and repository validation are separate.",
-            Err(_) => "Destination unavailable or bound mount absent.",
+        let status = match &d.kind {
+            DestinationKind::Sftp { .. } | DestinationKind::Smb { .. } => {
+                "Connection not tested. Test connectivity and validate the repository separately."
+            }
+            DestinationKind::Local { .. } => {
+                "Local folder; removable-device identity is not bound."
+            }
+            _ => match backup_system::validate_destination(&d) {
+                Ok(_) => "Bound mount available; repository validation is separate.",
+                Err(_) => "Destination unavailable or bound mount absent.",
+            },
         };
         let row = card(&d.name, status);
         let buttons = w::hbox(4);

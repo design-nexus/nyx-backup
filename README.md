@@ -24,6 +24,8 @@ cargo test --locked -p backup-engine
 dbus-run-session -- python3 tools/smoke.py
 # Private-bus activation and a disposable transient user timer:
 python3 tools/service-smoke.py
+# Loopback SFTP-only server, private SSH config and disposable data:
+python3 tools/sftp-smoke.py
 ```
 
 The smoke test requires built release binaries, `gnome-keyring-daemon`, `gdbus`, and native Restic. It retains its private temporary fixture for inspection. See [qualification](docs/QUALIFICATION.md) for evidence and limits.

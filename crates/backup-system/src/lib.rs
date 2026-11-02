@@ -230,9 +230,18 @@ pub fn connection_test(store: &Store, d: &Destination) -> Result<serde_json::Val
             checked(c, "SMB connection")?;
         }
         DestinationKind::Sftp { host, .. } => {
-            let mut c = clean_command("ssh");
-            c.args(["-oBatchMode=yes", "-oConnectTimeout=15", "--", host, "true"]);
-            checked(c, "SSH connection")?;
+            // Probe the same subsystem used by Restic. SFTP-only accounts may
+            // intentionally reject every remote shell command.
+            let mut c = clean_command("sftp");
+            c.args([
+                "-b",
+                "/dev/null",
+                "-oBatchMode=yes",
+                "-oConnectTimeout=15",
+                "--",
+                host,
+            ]);
+            checked(c, "SFTP connection")?;
         }
         _ => {
             let p = d.local_path().unwrap();
