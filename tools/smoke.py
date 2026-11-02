@@ -44,6 +44,8 @@ approved = true
 keep_last = 1
 schedule = "daily"
 '''
+# Select a path containing .. so the native backup also proves normalized exclusions.
+config=config.replace(f'sources = ["{root}/source"]', f'sources = ["{root}/source/build/.."]')
 (root/'fixture.toml').write_text(config)
 (root/'source/keep.txt').write_text('initial\n');os.chmod(root/'source/keep.txt',0o640)
 (root/'source/build/valuable').write_text('build folders are not disposable')
@@ -71,6 +73,18 @@ encrypted=root/'config/nyx-backup/rclone/smb-fixture.conf'
 assert encrypted.read_text().startswith('RCLONE_ENCRYPT_V0:') and 'fixture-only-nas-password' not in encrypted.read_text()
 decoded=cmd('rclone','--config',encrypted,'--password-command','secret-tool lookup application nyx-backup account smb-fixture kind rclone','--ask-password=false','config','dump')
 assert json.loads(decoded.stdout)['nas']['type']=='smb'
+# Failed SMB credential updates must preserve the existing encrypted config/key.
+original_ciphertext=encrypted.read_bytes()
+original_unlock=cmd('secret-tool','lookup','application','nyx-backup','account','smb-fixture','kind','rclone').stdout
+fault_bin=root/'fault-bin';fault_bin.mkdir()
+(fault_bin/'rclone').write_text('#!/bin/sh\nexit 1\n');(fault_bin/'rclone').chmod(0o700)
+original_path=os.environ['PATH'];os.environ['PATH']=str(fault_bin)+os.pathsep+original_path
+failed_update=call('smb-password','smb-fixture','--stdin',input='replacement-fixture-password\n',ok=False)
+os.environ['PATH']=original_path
+assert 'error' in failed_update and encrypted.read_bytes()==original_ciphertext
+assert cmd('secret-tool','lookup','application','nyx-backup','account','smb-fixture','kind','rclone').stdout==original_unlock
+assert cmd('rclone','--config',encrypted,'--password-command','secret-tool lookup application nyx-backup account smb-fixture kind rclone','--ask-password=false','config','dump').stdout==decoded.stdout
+
 
 # The D-Bus activation file supplies an isolated service without touching user units.
 activation=root/'data/dbus-1/services';activation.mkdir(parents=True)
@@ -143,10 +157,13 @@ try:
  else:raise AssertionError('Interrupted worker was not reconciled')
  # Lock the fixture Secret Service collection. No user's keyring is involved.
  cmd('gdbus','call','--session','--dest','org.freedesktop.secrets','--object-path','/org/freedesktop/secrets','--method','org.freedesktop.Secret.Service.Lock',"[objectpath '/org/freedesktop/secrets/collection/login']",ok=False)
- locked=call('destination','fixture','validate','fixture',ok=False);assert locked['state']=='failed',locked
+ lock_check_started=time.monotonic()
+ locked=call('destination','fixture','validate','fixture',ok=False)
+ assert locked['state']=='failed' and 'locked' in locked['message'].lower(),locked
+ assert time.monotonic()-lock_check_started<5, 'Locked credential lookup must not wait for an unlock prompt'
  state=''.join(p.read_text() for p in (root/'state/nyx-backup/jobs').glob('*.json'))+(root/'config/nyx-backup/config.toml').read_text()
  assert 'fixture-only-recovery-password' not in state and 'disposable-fixture-unlock' not in state
- print(json.dumps({'fixture':str(root),'passed':['initial and incremental snapshots','shared selection rules','native restore contents and permissions','metadata/full verification','retention preview and scoped deletion','worker concurrency','partial read result','cancellation','API restrictions','approval enforcement','interrupted-job reconciliation','locked credentials','no secrets in state']},indent=2))
+ print(json.dumps({'fixture':str(root),'passed':['initial and incremental snapshots','shared selection rules','native restore contents and permissions','metadata/full verification','retention preview and scoped deletion','worker concurrency','partial read result','cancellation','API restrictions','approval enforcement','interrupted-job reconciliation','locked credentials','no secrets in state','normalized source exclusions','failed SMB credential update preserves access']},indent=2))
 finally:
  worker.terminate()
  try:worker.wait(timeout=10)

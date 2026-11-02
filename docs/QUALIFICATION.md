@@ -30,3 +30,13 @@ Installation verification: all three installed binaries match the release SHA-25
 `python3 tools/sftp-smoke.py`: **passed** against an unprivileged loopback OpenSSH server restricted to `internal-sftp`, with ephemeral client/host keys, strict host-key checking, private SSH configuration and a private Secret Service/D-Bus session. Confirmed the old remote-shell probe fails for this account; the corrected SFTP subsystem probe succeeds without creating a repository. Explicit initialization, encrypted backup, full-data verification, snapshot history and native Restic restoration succeeded, with matching contents and file mode 0640. Missing repository validation and disconnected transport checks failed without initializing a replacement. No real SSH configuration, data or NAS credentials were used.
 
 The locked workspace release build, formatting and diff checks passed after this change. Updated binaries, launcher and icon were installed without opening or restarting the GUI.
+
+## Path, mount and credential safety (2026-11-02)
+
+- Focused domain checks: **9 passed**, including source paths containing `..`, exclusions expressed through the selected source spelling, open database detection through normalized paths, selected and dangling symlink roots, destination parent-path rejection, and a real nested-mount refusal using existing `/` and `/proc` mount metadata. The mount test is read-only and does not create mounts.
+- Locked workspace release build, formatting and diff checks: **passed**.
+- Updated disposable integration fixture: **passed**. Actual Restic backup/restoration preserves repository/cache/key exclusions when the selected source contains `..`. An injected Rclone failure during SMB credential update leaves the original ciphertext and unlock key unchanged, and native Rclone still decodes that original configuration. This qualifies credential-update failure handling, not an SMB endpoint.
+- Locking the isolated Secret Service collection causes repository validation to fail with an explicit locked-credential error in under five seconds, without waiting for an unlock prompt.
+- Installation includes all three binaries, launcher and icon. Only the idle background service is restarted to load these safety changes; the GUI is not opened or restarted.
+
+SMB/NFS endpoint qualification, physical unplug races and GUI interaction/visual review remain unverified.

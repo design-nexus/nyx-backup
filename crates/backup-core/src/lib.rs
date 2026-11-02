@@ -217,8 +217,12 @@ impl Destination {
             DestinationKind::Local { path }
             | DestinationKind::Mounted { path, .. }
             | DestinationKind::Nfs { path, .. } => ensure!(
-                path.is_absolute() && !path.to_string_lossy().contains(['\n', '\r']),
-                "Destination needs an absolute path"
+                path.is_absolute()
+                    && !path.to_string_lossy().contains(['\n', '\r'])
+                    && !path
+                        .components()
+                        .any(|c| c == std::path::Component::ParentDir),
+                "Destination needs an absolute path without parent-directory (..) components"
             ),
             DestinationKind::Sftp { host, path } => {
                 ensure!(
@@ -256,6 +260,31 @@ impl Destination {
                     "Invalid SMB share or path"
                 );
             }
+        }
+        if let DestinationKind::Mounted {
+            path,
+            mount_point,
+            source,
+            filesystem,
+            ..
+        }
+        | DestinationKind::Nfs {
+            path,
+            mount_point,
+            source,
+            filesystem,
+        } = &self.kind
+        {
+            ensure!(
+                mount_point.is_absolute()
+                    && !mount_point
+                        .components()
+                        .any(|c| c == std::path::Component::ParentDir)
+                    && path.starts_with(mount_point)
+                    && !source.is_empty()
+                    && !filesystem.is_empty(),
+                "Record an absolute mount point, source and filesystem; keep the repository inside that mount"
+            );
         }
         Ok(())
     }

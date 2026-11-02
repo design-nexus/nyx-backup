@@ -99,9 +99,19 @@ pub fn select(store: &Store, c: &Config, p: &Profile) -> Result<Selection> {
         .collect();
     let mut entries = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    let mut scan_roots = Vec::new();
     for source in &p.sources {
-        let absolute = fs::canonicalize(source)
-            .with_context(|| format!("Source is unavailable: {}", source.display()))?;
+        let absolute = match fs::canonicalize(source) {
+            Ok(path) => path,
+            Err(_) if fs::symlink_metadata(source).is_ok_and(|m| m.file_type().is_symlink()) => {
+                fs::canonicalize(source.parent().context("Source has no parent")?)?
+                    .join(source.file_name().context("Source has no name")?)
+            }
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("Source is unavailable: {}", source.display()));
+            }
+        };
         ensure!(
             !canonical_forbidden.iter().any(|f| absolute.starts_with(f)),
             "Source is inside Backup's working files or a repository destination"
@@ -113,6 +123,16 @@ pub fn select(store: &Store, c: &Config, p: &Profile) -> Result<Selection> {
                 "Source and repository overlap"
             );
         }
+        // Resolve traversal and ancestor aliases before matching exclusions.
+        // Preserve a final symlink as a link, including a dangling one.
+        let scan_source = if fs::symlink_metadata(source)?.file_type().is_symlink() {
+            fs::canonicalize(source.parent().context("Source has no parent")?)?
+                .join(source.file_name().context("Source has no name")?)
+        } else {
+            absolute
+        };
+        let requested_source = source;
+        let source = &scan_source;
         let excluded = |path: &Path| -> bool {
             if forbidden
                 .iter()
@@ -134,6 +154,9 @@ pub fn select(store: &Store, c: &Config, p: &Profile) -> Result<Selection> {
             }
             globs.is_match(path)
                 || path
+                    .strip_prefix(source)
+                    .is_ok_and(|relative| globs.is_match(requested_source.join(relative)))
+                || path
                     .file_name()
                     .is_some_and(|s| globs.is_match(Path::new(s)))
                 || path.strip_prefix(source).is_ok_and(|s| globs.is_match(s))
@@ -142,8 +165,12 @@ pub fn select(store: &Store, c: &Config, p: &Profile) -> Result<Selection> {
             !excluded(source),
             "Selected source is excluded by safety rules; select a readable export or explicitly authorize recognized credentials"
         );
+        if !fs::symlink_metadata(source)?.file_type().is_symlink() {
+            scan_roots.push(source.clone());
+        }
         let walk = walkdir::WalkDir::new(source)
             .follow_links(false)
+            .follow_root_links(false)
             .into_iter()
             .filter_entry(|e| !excluded(e.path()));
         for e in walk {
@@ -213,7 +240,7 @@ pub fn select(store: &Store, c: &Config, p: &Profile) -> Result<Selection> {
             if let Ok(fds) = fs::read_dir(proc.path().join("fd")) {
                 for fd in fds.flatten() {
                     if let Ok(path) = fs::read_link(fd.path()) {
-                        if p.sources.iter().any(|s| path.starts_with(s)) && recognized_store(&path)
+                        if scan_roots.iter().any(|s| path.starts_with(s)) && recognized_store(&path)
                         {
                             preview.blocked.push(format!(
                                 "Open database/VM store: {}. Stop it or select an export.",
@@ -260,6 +287,7 @@ fn repo_args(store: &Store, d: &Destination) -> Result<Vec<String>> {
             rclone_config(store, &d.id).exists(),
             "Set up SMB credentials first"
         );
+        ensure_secret_unlocked(&d.id, "rclone")?;
         let q = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
         let command = format!(
             "rclone --config {} --password-command {} --ask-password=false --contimeout 15s --timeout 30s",
@@ -603,6 +631,86 @@ mod fixture_tests {
         fs::create_dir_all(root.join("repo")).unwrap();
         p.sources = vec![root.join("repo")];
         assert!(select(&store, &c, &p).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn normalized_sources_keep_repository_exclusions() {
+        let (root, store, mut c, mut p) = fixture();
+        let repository = root.join("source/repository");
+        fs::create_dir_all(&repository).unwrap();
+        fs::write(repository.join("private-pack"), b"not a source").unwrap();
+        c.destinations[0].kind = DestinationKind::Local {
+            path: repository.clone(),
+        };
+        p.sources = vec![root.join("source/project/..")];
+        let selection = select(&store, &c, &p).unwrap();
+        assert_eq!(selection.preview.files, 2);
+        assert!(
+            selection
+                .entries
+                .iter()
+                .all(|p| !p.starts_with(&repository))
+        );
+        p.exclusions = vec![
+            root.join("source/project/../keep.txt")
+                .display()
+                .to_string(),
+        ];
+        assert_eq!(select(&store, &c, &p).unwrap().preview.files, 1);
+        let _active_database = fs::File::create(root.join("source/active.db")).unwrap();
+        assert!(
+            select(&store, &c, &p)
+                .unwrap()
+                .preview
+                .blocked
+                .iter()
+                .any(|message| message.contains("active.db"))
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn selected_root_symlinks_are_never_followed() {
+        use std::os::unix::fs::symlink;
+        let (root, store, c, mut p) = fixture();
+        fs::create_dir(root.join("outside")).unwrap();
+        fs::write(root.join("outside/sensitive"), b"fixture").unwrap();
+        let link = root.join("selected-link");
+        symlink(root.join("outside"), &link).unwrap();
+        p.sources = vec![link.clone()];
+        let selection = select(&store, &c, &p).unwrap();
+        assert_eq!(selection.entries, vec![link]);
+        assert_eq!(selection.preview.files, 1);
+        let dangling = root.join("dangling");
+        symlink(root.join("absent"), &dangling).unwrap();
+        p.sources = vec![dangling.clone()];
+        assert_eq!(select(&store, &c, &p).unwrap().entries, vec![dangling]);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn destination_traversal_and_nested_mount_are_refused() {
+        let (root, _, mut c, _) = fixture();
+        c.destinations[0].kind = DestinationKind::Local {
+            path: root.join("absent/../../escaped"),
+        };
+        assert!(c.validate().is_err());
+        let mount = mount_identity(Path::new("/")).unwrap();
+        let d = Destination {
+            id: "nested".into(),
+            name: "Nested mount".into(),
+            kind: DestinationKind::Mounted {
+                path: PathBuf::from("/proc/nyx-backup-qualification"),
+                mount_point: PathBuf::from("/"),
+                source: mount["source"].as_str().unwrap().into(),
+                filesystem: mount["fstype"].as_str().unwrap().into(),
+                uuid: mount["uuid"].as_str().unwrap_or("").into(),
+            },
+        };
+        assert!(
+            validate_destination(&d)
+                .unwrap_err()
+                .to_string()
+                .contains("different mount")
+        );
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

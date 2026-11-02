@@ -18,8 +18,39 @@ pub fn save_password(id: &str, secret: &Secret) -> Result<()> {
     valid_id(id)?;
     store_secret("nyx-backup", id, "repository", secret)
 }
-pub fn password(id: &str) -> Result<Secret> {
+/// Search metadata without asking Secret Service to unlock a collection.
+/// Scheduled work must fail promptly instead of waiting for an unlock prompt.
+pub fn ensure_secret_unlocked(id: &str, kind: &str) -> Result<()> {
     valid_id(id)?;
+    let connection = zbus::blocking::Connection::session()?;
+    let proxy = zbus::blocking::Proxy::new(
+        &connection,
+        "org.freedesktop.secrets",
+        "/org/freedesktop/secrets",
+        "org.freedesktop.Secret.Service",
+    )?;
+    for application in ["nyx-backup", "nixe-backup"] {
+        let attributes = std::collections::HashMap::from([
+            ("application", application),
+            ("account", id),
+            ("kind", kind),
+        ]);
+        let (unlocked, locked): (
+            Vec<zbus::zvariant::OwnedObjectPath>,
+            Vec<zbus::zvariant::OwnedObjectPath>,
+        ) = proxy.call("SearchItems", &(attributes,))?;
+        if !unlocked.is_empty() {
+            return Ok(());
+        }
+        ensure!(
+            locked.is_empty(),
+            "Secret Service credential is locked. Unlock the keyring before starting this operation."
+        );
+    }
+    anyhow::bail!("No saved credential for this destination. Set it up in Backup first.")
+}
+pub fn password(id: &str) -> Result<Secret> {
+    ensure_secret_unlocked(id, "repository")?;
     lookup_secret("nyx-backup", id, "repository")
         .context("Unlock Secret Service and save the repository password")
 }
@@ -75,9 +106,17 @@ pub fn setup_smb(store: &Store, d: &Destination, secret: &Secret) -> Result<()> 
         anyhow::bail!("Select an SMB destination")
     };
     d.validate()?;
-    store_secret("nyx-backup", &d.id, "smb", secret)?;
-    let unlock = generated_secret()?;
-    store_secret("nyx-backup", &d.id, "rclone", &unlock)?;
+    // Reuse the unlock key for existing ciphertext. Replacing it before a
+    // successful config write would destroy access if credential setup failed.
+    let unlock = if rclone_config(store, &d.id).exists() {
+        ensure_secret_unlocked(&d.id, "rclone")?;
+        lookup_secret("nyx-backup", &d.id, "rclone")
+            .context("Unlock the existing SMB configuration before updating credentials")?
+    } else {
+        let unlock = generated_secret()?;
+        store_secret("nyx-backup", &d.id, "rclone", &unlock)?;
+        unlock
+    };
     let mut c = clean_command("rclone");
     c.args(["obscure", "-"])
         .stdin(Stdio::piped())
@@ -113,6 +152,7 @@ pub fn setup_smb(store: &Store, d: &Destination, secret: &Secret) -> Result<()> 
         .map_err(|_| anyhow::anyhow!("Could not encrypt Rclone configuration"))?;
     let mut data = nonce.to_vec();
     data.extend(encrypted);
+    store_secret("nyx-backup", &d.id, "smb", secret)?;
     atomic(
         &rclone_config(store, &d.id),
         format!(
@@ -128,6 +168,7 @@ pub fn rclone(store: &Store, d: &Destination) -> Result<Command> {
         rclone_config(store, &d.id).exists(),
         "Set up SMB credentials first"
     );
+    ensure_secret_unlocked(&d.id, "rclone")?;
     let mut c = clean_command("rclone");
     c.args(["--config"]).arg(rclone_config(store, &d.id)).args([
         "--password-command",
@@ -208,6 +249,14 @@ pub fn validate_destination(d: &Destination) -> Result<()> {
             ensure!(
                 canonical.starts_with(fs::canonicalize(mount_point)?),
                 "Repository path escapes the bound mount"
+            );
+            let repository_mount = mount_identity(&canonical)?;
+            ensure!(
+                repository_mount["target"] == m["target"]
+                    && repository_mount["source"] == m["source"]
+                    && repository_mount["fstype"] == m["fstype"]
+                    && repository_mount["uuid"] == m["uuid"],
+                "Repository crosses into a different mount; bind that destination separately"
             );
         }
         DestinationKind::Local { path } => {

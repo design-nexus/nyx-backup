@@ -14,3 +14,5 @@ uuid.workspace = true
 base64 = "0.22"
 sha2 = "0.10"
 crypto_secretbox = { version = "0.1", features = ["std"] }
+
+zbus = { version = "5", default-features = false, features = ["tokio", "blocking-api"] }
