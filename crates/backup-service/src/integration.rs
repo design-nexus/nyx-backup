@@ -26,10 +26,17 @@ pub fn list(s: &Store) -> Result<Vec<Grant>> {
         return Ok(vec![]);
     }
     let mut a = Vec::new();
-    for entry in fs::read_dir(p)?.take(1024) {
-        let p = entry?.path();
+    for entry in fs::read_dir(p)?.flatten().take(1024) {
+        let p = entry.path();
         if p.extension().is_some_and(|s| s == "json") {
-            a.push(serde_json::from_slice(&fs::read(p)?)?);
+            // A damaged grant is never honoured, and must not hide the others.
+            match fs::read(&p)
+                .map_err(anyhow::Error::from)
+                .and_then(|b| Ok(serde_json::from_slice::<Grant>(&b)?))
+            {
+                Ok(g) => a.push(g),
+                Err(e) => eprintln!("Skipping unreadable grant {}: {e}", p.display()),
+            }
         }
     }
     Ok(a)

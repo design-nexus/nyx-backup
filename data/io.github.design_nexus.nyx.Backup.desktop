@@ -7,3 +7,4 @@ Icon=io.github.design_nexus.nyx.Backup
 Terminal=false
 Categories=System;Archiving;Utility;
 StartupNotify=true
+StartupWMClass=io.github.design_nexus.nyx.Backup

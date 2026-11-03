@@ -63,6 +63,8 @@ config=config.replace(f'sources = ["{root}/source"]', f'sources = ["{root}/sourc
 keyring=cmd('gnome-keyring-daemon','--unlock','--components=secrets',input='disposable-fixture-unlock\n')
 call('config','import',root/'fixture.toml')
 call('password','fixture','--stdin',input='fixture-only-recovery-password\n')
+# An existing repository password is never silently overwritten.
+assert 'error' in call('password','fixture','--stdin',input='accidental-overwrite\n',ok=False)
 # Verify encrypted Rclone config using Rclone's own decoder, without a live NAS.
 smb_config=config+'''
 [[destinations]]
@@ -145,6 +147,9 @@ try:
 
  init=call('destination','fixture','init','fixture','--confirm')
  assert init['state']=='success',init
+ # Replacement must open the existing repository; the saved password stays otherwise.
+ assert 'error' in call('password','fixture','--stdin','--replace',input='wrong-fixture-password\n',ok=False)
+ call('password','fixture','--stdin','--replace',input='fixture-only-recovery-password\n')
  first=call('backup','fixture','--wait');assert first['state']=='success',first
  (root/'source/keep.txt').write_text('incremental\n');(root/'source/new.txt').write_text('new\n')
  second=call('backup','fixture','--wait');assert second['state']=='success',second

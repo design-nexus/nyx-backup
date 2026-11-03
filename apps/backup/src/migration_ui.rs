@@ -1,7 +1,12 @@
-//! Phase 3: reviewed user migration and Setup handoff; never a root installer UI.
-use super::*;
+//! Reviewed user migration and Setup handoff; never a root installer UI.
+use crate::forms::{self, Sheet};
+use crate::ui::*;
 use backup_core::migration::Inventory;
 use backup_migrate::{Bundle, Request};
+use gtk::prelude::*;
+use nyx_ui::widgets as w;
+use std::rc::Rc;
+
 pub fn prepare(
     ui: &Rc<Ui>,
     profile: String,
@@ -11,13 +16,12 @@ pub fn prepare(
     policy: backup_restore::Policy,
     secrets: bool,
 ) {
-    let next = profile.clone();
+    let p = profile.clone();
     work(
         ui,
-        "Preparing migration and package plan…",
         move || {
             backup_service::migration_start(
-                &profile,
+                &p,
                 Request::Prepare {
                     snapshot,
                     paths,
@@ -28,220 +32,250 @@ pub fn prepare(
                 },
             )
         },
-        move |ui, id| {
-            *ui.job.borrow_mut() = Some(id.clone());
-            let ui = ui.clone();
-            nyx_core::cmd::background(
-                move || backup_service::wait_job(&id),
-                move |result| match result {
-                    Ok(value) => {
-                        if value["state"] != "success" {
-                            message(&ui, "Migration needs attention", &outcome(&value));
-                            return;
-                        }
-                        if let Some(bundle) = value["result"]["bundle"].as_str() {
-                            review(&ui, next, bundle.into());
-                        }
-                    }
-                    Err(e) => message(&ui, "Migration needs attention", &e.to_string()),
-                },
-            );
+        move |ui, job| {
+            toast(ui, "Preparing the migration…");
+            track(ui, job, move |ui, value| {
+                if value["state"] != "success" {
+                    error(
+                        ui,
+                        "The migration couldn't be prepared",
+                        value["message"].as_str().unwrap_or(""),
+                    );
+                    return;
+                }
+                if let Some(bundle) = value["result"]["bundle"].as_str() {
+                    review(ui, profile, bundle.into());
+                }
+            });
         },
     );
 }
-fn read(
-    ui: &Rc<Ui>,
-    profile: String,
-    request: Request,
-    done: impl FnOnce(&Rc<Ui>, serde_json::Value) + 'static,
-) {
+
+pub fn review(ui: &Rc<Ui>, profile: String, id: String) {
+    let p = profile.clone();
     work(
         ui,
-        "Reading migration data…",
-        move || Ok(backup_service::migration_read(&profile, request)?.to_string()),
-        move |ui, s| {
-            if let Ok(value) = serde_json::from_str(&s) {
-                done(ui, value)
-            }
-        },
-    );
-}
-pub fn review(ui: &Rc<Ui>, profile: String, id: String) {
-    let next = profile.clone();
-    read(
-        ui,
-        profile,
-        Request::Inspect { bundle: id },
+        move || backup_service::migration_read(&p, Request::Inspect { bundle: id }),
         move |ui, value| {
             let bundle: Bundle = match serde_json::from_value(value) {
-                Ok(bundle) => bundle,
-                Err(_) => return,
-            };
-            let d = dialog(&ui.window, "Review migration and Setup bundle");
-            d.set_default_width(800);
-            d.set_default_height(650);
-            d.add_button("Close", gtk::ResponseType::Close);
-            let b = form(&d);
-            let summary = text(
-                &format!(
-                    "Setup bundle {}\n{} → {}\nSource home: {}\nTarget home: {}\n{} packages proposed; {} files held for review",
-                    bundle.id,
-                    bundle.source.hardware.architecture,
-                    bundle.target.hardware.architecture,
-                    bundle.source.home.display(),
-                    bundle.target.home.display(),
-                    bundle
-                        .packages
-                        .iter()
-                        .filter(|p| p.action == "install")
-                        .count(),
-                    bundle.held_files.len()
-                ),
-                "",
-            );
-            summary.set_selectable(true);
-            b.append(&summary);
-            for change in &bundle.hardware_changes {
-                b.append(&text(change, "dim-label"));
-            }
-            for warning in &bundle.warnings {
-                b.append(&text(warning, "dim-label"));
-            }
-            let actions = w::hbox(6);
-            if let Some(plan) = &bundle.restore_plan {
-                let u = ui.clone();
-                let profile = next.clone();
-                let plan = plan.clone();
-                actions.append(&action(
-                    "document-properties-symbolic",
-                    "Review mapped files, adaptations and rollback plan",
-                    move || restore_ui::review(&u, profile.clone(), plan.clone()),
-                ));
-            }
-            let u = ui.clone();
-            let profile = next.clone();
-            let id = bundle.id.clone();
-            let parent = d.clone();
-            actions.append(&action("document-save-symbolic","Export a new Setup bundle file",move||{let u=u.clone();let profile=profile.clone();let id=id.clone();gtk::FileDialog::builder().title("Export Setup bundle").initial_name("nyx-backup-setup.json").build().save(Some(&parent),gio::Cancellable::NONE,move|result|{if let Ok(file)=result{if let Some(path)=file.path(){read(&u,profile,Request::Export{bundle:id,path},|ui,_|message(ui,"Setup bundle exported","Use nyx-backup-setup inspect FILE to review the handoff. Package installation and configuration restoration are separate, explicitly confirmed actions. Nothing was installed or restored by exporting."));}}});}));
-            b.append(&actions);
-            b.append(&text("Package versions are provenance, not downgrade instructions. The Setup consumer uses the target's configured package repositories. Drivers, kernels, firmware, foreign builds and Flatpaks are held for separate review.","dim-label"));
-            let package_rows = w::vbox(6);
-            b.append(&package_rows);
-            let more = gtk::Button::with_label("Show more packages");
-            b.append(&more);
-            let offset = Rc::new(Cell::new(0));
-            let packages = Rc::new(bundle.packages.clone());
-            let populate = {
-                let rows = package_rows.clone();
-                let more = more.clone();
-                let offset = offset.clone();
-                move || {
-                    let end = (offset.get() + 100).min(packages.len());
-                    for package in &packages[offset.get()..end] {
-                        rows.append(&text(
-                            &format!("{} · {}\n{}", package.name, package.action, package.reason),
-                            "",
-                        ));
-                    }
-                    offset.set(end);
-                    more.set_visible(end < packages.len());
+                Ok(b) => b,
+                Err(e) => {
+                    error(ui, "This migration can't be shown", &e.to_string());
+                    return;
                 }
             };
-            let populate = Rc::new(populate);
-            populate();
-            let pop = populate.clone();
-            more.connect_clicked(move |_| pop());
-            if !bundle.source.flatpaks.is_empty() {
-                b.append(&text("Flatpak applications — manual review", "heading"));
-                for app in bundle.source.flatpaks.iter().take(200) {
-                    b.append(&text(
-                        &format!(
-                            "{} · {} · {} · {}",
-                            app.application, app.branch, app.architecture, app.origin
-                        ),
-                        "dim-label",
-                    ));
-                }
-            }
-            if !bundle.held_files.is_empty() {
-                b.append(&text("Files held for manual review", "heading"));
-                for file in bundle.held_files.iter().take(200) {
-                    b.append(&text(
-                        &format!("{}\n{}", file.path, file.reason),
-                        "dim-label",
-                    ));
-                }
-                if bundle.held_files.len() > 200 {
-                    b.append(&text(
-                        "More held-file details are in the exported bundle.",
-                        "dim-label",
-                    ));
-                }
-            }
-            d.connect_response(|d, _| d.close());
-            d.present();
+            review_sheet(ui, profile, bundle);
         },
     );
 }
-pub fn bundles(ui: &Rc<Ui>, profile: String) {
-    let next = profile.clone();
-    read(ui, profile, Request::Bundles, move |ui, value| {
-        let d = dialog(&ui.window, "Migration / Setup bundles");
-        d.add_button("Close", gtk::ResponseType::Close);
-        let b = form(&d);
-        let values = value["bundles"].as_array().cloned().unwrap_or_default();
-        if values.is_empty() {
-            b.append(&text(
-                "Choose a snapshot and the Migration / Setup mode to prepare a bundle.",
-                "dim-label",
+
+fn review_sheet(ui: &Rc<Ui>, profile: String, bundle: Bundle) {
+    let sheet = Sheet::new("Review the migration", 600);
+    let installs = bundle
+        .packages
+        .iter()
+        .filter(|p| p.action == "install")
+        .count();
+    let (flow, values) = w::kv_flow(&["Packages", "Files held", "From"]);
+    values[0].set_text(&installs.to_string());
+    values[1].set_text(&bundle.held_files.len().to_string());
+    values[2].set_text(&bundle.source.hardware.architecture);
+    sheet.body.append(&flow);
+    sheet.body.append(&label(
+        &format!(
+            "{} → {}",
+            nyx_core::paths::pretty(&bundle.source.home),
+            nyx_core::paths::pretty(&bundle.target.home)
+        ),
+        "field-hint",
+    ));
+    for note in bundle.hardware_changes.iter().chain(&bundle.warnings) {
+        sheet.body.append(&label(note, "field-hint"));
+    }
+    sheet.body.append(&label(
+        "Package versions are a record, not instructions: Setup installs from this computer's repositories. Drivers, kernels, firmware, foreign builds and Flatpaks are held for you to review.",
+        "field-hint",
+    ));
+    let packages = w::vbox(2);
+    packages.add_css_class("compact-list");
+    for p in bundle.packages.iter().take(150) {
+        let row = w::hbox(8);
+        row.add_css_class("plan-row");
+        row.append(&w::tag(
+            &p.action,
+            if p.action == "install" { "accent" } else { "" },
+        ));
+        let text = w::vbox(1);
+        text.set_hexpand(true);
+        text.append(&line(&p.name, "file-name"));
+        text.append(&line(&p.reason, "job-detail"));
+        row.append(&text);
+        packages.append(&row);
+    }
+    forms::field(&sheet.body, "Packages", "", &packages);
+    if !bundle.held_files.is_empty() {
+        let held = w::vbox(2);
+        held.add_css_class("compact-list");
+        for f in bundle.held_files.iter().take(150) {
+            let t = w::vbox(1);
+            t.append(&line(&f.path, "file-name"));
+            t.append(&label(&f.reason, "job-detail"));
+            held.append(&t);
+        }
+        forms::field(&sheet.body, "Held for review", "", &held);
+    }
+    if !bundle.source.flatpaks.is_empty() {
+        let fl = w::vbox(2);
+        fl.add_css_class("compact-list");
+        for a in bundle.source.flatpaks.iter().take(150) {
+            fl.append(&line(
+                &format!("{} · {}", a.application, a.origin),
+                "path-line",
             ));
         }
-        for bundle in values {
-            if let Some(id) = bundle["id"].as_str() {
-                let row = card(id, bundle["snapshot"].as_str().unwrap_or(""));
-                let u = ui.clone();
-                let profile = next.clone();
-                let id = id.to_string();
-                row.append(&action(
-                    "document-properties-symbolic",
-                    "Review migration bundle",
-                    move || review(&u, profile.clone(), id.clone()),
-                ));
-                b.append(&row);
-            }
-        }
-        d.connect_response(|d, _| d.close());
-        d.present();
-    });
+        forms::field(&sheet.body, "Flatpak apps", "Install these yourself.", &fl);
+    }
+    sheet.close_button("Close");
+    let export = sheet.action("Export bundle…", false);
+    {
+        let (u, profile, id, parent) = (
+            ui.clone(),
+            profile.clone(),
+            bundle.id.clone(),
+            sheet.parent.clone(),
+        );
+        export.connect_clicked(move |_| {
+            let (u, profile, id) = (u.clone(), profile.clone(), id.clone());
+            forms::choose_save(
+                &parent,
+                "Export the Setup bundle",
+                "nyx-backup-setup.json",
+                move |path| {
+                    let (profile, id) = (profile.clone(), id.clone());
+                    work(
+                        &u,
+                        move || {
+                            backup_service::migration_read(
+                                &profile,
+                                Request::Export { bundle: id, path },
+                            )
+                        },
+                        |ui, _| {
+                            toast(
+                                ui,
+                                "Bundle exported. Review it with nyx-backup-setup inspect.",
+                            )
+                        },
+                    );
+                },
+            );
+        });
+    }
+    if let Some(plan) = bundle.restore_plan.clone() {
+        let files = sheet.action("Review files…", true);
+        let (win, u, profile) = (sheet.clone(), ui.clone(), profile.clone());
+        files.connect_clicked(move |_| {
+            win.close();
+            crate::restore_ui::review(&u, profile.clone(), plan.clone());
+        });
+    }
+    sheet.present();
 }
+
+pub fn bundles(ui: &Rc<Ui>, profile: String) {
+    let p = profile.clone();
+    work(
+        ui,
+        move || backup_service::migration_read(&p, Request::Bundles),
+        move |ui, value| {
+            let sheet = Sheet::new("Migration bundles", 500);
+            let items = value["bundles"].as_array().cloned().unwrap_or_default();
+            if items.is_empty() {
+                sheet.body.append(&label(
+                    "None yet. Select files in a snapshot and restore them to “This computer” to prepare one.",
+                    "",
+                ));
+            }
+            let list = w::vbox(2);
+            list.add_css_class("compact-list");
+            for b in items {
+                let Some(id) = b["id"].as_str().map(String::from) else {
+                    continue;
+                };
+                let row = w::hbox(10);
+                row.add_css_class("plan-row");
+                let text = w::vbox(1);
+                text.set_hexpand(true);
+                text.append(&line(
+                    &when(b["created"].as_u64().unwrap_or(0)),
+                    "file-name",
+                ));
+                text.append(&line(
+                    &format!(
+                        "Snapshot {}",
+                        b["snapshot"]
+                            .as_str()
+                            .unwrap_or("")
+                            .chars()
+                            .take(8)
+                            .collect::<String>()
+                    ),
+                    "job-detail",
+                ));
+                row.append(&text);
+                let (u, profile, win) = (ui.clone(), profile.clone(), sheet.clone());
+                row.append(&icon_button(
+                    "go-next-symbolic",
+                    "Open this bundle",
+                    move || {
+                        win.close();
+                        review(&u, profile.clone(), id.clone());
+                    },
+                ));
+                list.append(&row);
+            }
+            sheet.body.append(&list);
+            sheet.close_button("Close");
+            sheet.present();
+        },
+    );
+}
+
 pub fn inventory(ui: &Rc<Ui>) {
     work(
         ui,
-        "Reading package and hardware inventory…",
         || {
-            Ok(serde_json::to_string(
-                &backup_system::migration_inventory::capture(),
-            )?)
+            let inventory = backup_system::migration_inventory::capture();
+            Ok(inventory)
         },
-        |ui, s| {
-            if let Ok(inventory) = serde_json::from_str::<Inventory>(&s) {
-                message(
-                    ui,
-                    "Current migration inventory",
-                    &format!(
-                        "Architecture: {}\nMachine: {} {}\n{} packages; {} Flatpak apps; {} connected displays\nHome: {}\nConfig: {}\n\nMissing coverage:\n{}\n\nNew backups include a versioned inventory inside their encrypted snapshot metadata. No repository refresh, package installation or configuration change was performed.",
-                        inventory.hardware.architecture,
-                        inventory.hardware.system_vendor,
-                        inventory.hardware.product,
-                        inventory.packages.len(),
-                        inventory.flatpaks.len(),
-                        inventory.hardware.displays.len(),
-                        inventory.home.display(),
-                        inventory.config.display(),
-                        inventory.missing.join("\n")
-                    ),
+        |_, inv: Inventory| {
+            let sheet = Sheet::new("This computer's inventory", 480);
+            let (flow, values) = w::kv_flow(&["Packages", "Flatpaks", "Displays"]);
+            values[0].set_text(&inv.packages.len().to_string());
+            values[1].set_text(&inv.flatpaks.len().to_string());
+            values[2].set_text(&inv.hardware.displays.len().to_string());
+            sheet.body.append(&flow);
+            sheet.body.append(&label(
+                &format!(
+                    "{} {} · {}",
+                    inv.hardware.system_vendor, inv.hardware.product, inv.hardware.architecture
+                ),
+                "",
+            ));
+            if !inv.missing.is_empty() {
+                forms::field(
+                    &sheet.body,
+                    "Not covered",
+                    "",
+                    &label(&inv.missing.join("\n"), "field-hint"),
                 );
             }
+            sheet.body.append(&label(
+                "Every new backup stores this inventory inside its encrypted snapshot, for migrating to another computer. Reading it changed nothing.",
+                "field-hint",
+            ));
+            sheet.close_button("Close");
+            sheet.present();
         },
     );
 }

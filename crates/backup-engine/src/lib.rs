@@ -45,6 +45,7 @@ const SECRET_NAMES: &[&str] = &[
     "BraveSoftware",
     ".mozilla",
 ];
+/// Store folders, by name or by trailing path (`.var/app/…` spans components).
 const STORE_NAMES: &[&str] = &[
     ".docker",
     "containers",
@@ -62,8 +63,8 @@ fn recognized_secret(path: &Path) -> bool {
             .is_some_and(|s| s == "pem" || s == "key" || s == "kdbx")
 }
 fn recognized_store(path: &Path) -> bool {
-    path.components()
-        .any(|p| STORE_NAMES.iter().any(|s| p.as_os_str() == *s))
+    path.ancestors()
+        .any(|a| STORE_NAMES.iter().any(|s| a.ends_with(s)))
         || path.extension().is_some_and(|s| {
             ["db", "sqlite", "sqlite3", "qcow2", "vmdk", "vdi"]
                 .iter()
@@ -254,7 +255,9 @@ fn select_with_check(
             }
         }
     }
-    // Open database and VM images are blocked even when detected by a running process.
+    // Recognized stores are never selected, so an open one is reported, not a
+    // reason to refuse the backup (a running browser or Podman would block it).
+    let mut open_stores = std::collections::BTreeSet::new();
     if let Ok(procs) = fs::read_dir("/proc") {
         for proc in procs.flatten().filter(|p| {
             p.file_name()
@@ -269,15 +272,24 @@ fn select_with_check(
                     if let Ok(path) = fs::read_link(fd.path()) {
                         if scan_roots.iter().any(|s| path.starts_with(s)) && recognized_store(&path)
                         {
-                            preview.blocked.push(format!(
-                                "Open database/VM store: {}. Stop it or select an export.",
-                                path.display()
-                            ));
+                            open_stores.insert(path);
                         }
                     }
                 }
             }
         }
+    }
+    for path in open_stores.iter().take(20) {
+        preview.warnings.push(format!(
+            "Open database/VM store left out: {}. Back up an export to include its data.",
+            path.display()
+        ));
+    }
+    if open_stores.len() > 20 {
+        preview.warnings.push(format!(
+            "{} more open database/VM stores left out.",
+            open_stores.len() - 20
+        ));
     }
     preview.blocked.sort();
     preview.blocked.dedup();
@@ -391,22 +403,104 @@ pub fn reconcile(store: &Store) -> Result<()> {
 }
 fn terminate(child: &mut std::process::Child) {
     // Each Restic operation owns a process group, including SSH/Rclone descendants.
-    unsafe {
-        libc::kill(-(child.id() as i32), libc::SIGTERM);
-    }
-    for _ in 0..30 {
-        if child.try_wait().ok().flatten().is_some() {
-            return;
+    // Restic alone is interrupted first so it can remove its own repository lock
+    // while its transport is still running; then the whole group is stopped.
+    let group = child.id() as i32;
+    let group_alive = |child: &mut std::process::Child| {
+        let _ = child.try_wait();
+        unsafe { libc::kill(-group, 0) == 0 }
+    };
+    let wait = |child: &mut std::process::Child, tenths: u32, all: bool| {
+        for _ in 0..tenths {
+            let done = if all {
+                !group_alive(child)
+            } else {
+                child.try_wait().ok().flatten().is_some()
+            };
+            if done {
+                return true;
+            }
+            thread::sleep(std::time::Duration::from_millis(100));
         }
-        thread::sleep(std::time::Duration::from_millis(100));
-    }
+        false
+    };
     unsafe {
-        libc::kill(-(child.id() as i32), libc::SIGKILL);
+        libc::kill(group, libc::SIGINT);
+    }
+    wait(child, 50, false);
+    unsafe {
+        libc::kill(-group, libc::SIGTERM);
+    }
+    if !wait(child, 30, true) {
+        unsafe {
+            libc::kill(-group, libc::SIGKILL);
+        }
     }
     let _ = child.wait();
 }
+/// What Restic's documented exit codes mean for the user.
+fn restic_failure(code: Option<i32>) -> Option<&'static str> {
+    match code {
+        Some(10) => Some(
+            "No repository exists at this destination. Check the path, or initialize a new repository explicitly.",
+        ),
+        Some(11) => Some(
+            "The repository is locked by another Restic process. Backup never removes locks; make sure nothing else is using it.",
+        ),
+        Some(12) => Some("The saved repository password does not open this repository."),
+        _ => None,
+    }
+}
+fn hostname() -> Option<String> {
+    let name = fs::read_to_string("/proc/sys/kernel/hostname").ok()?;
+    let name = name.trim();
+    (!name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-._".contains(&b)))
+    .then(|| name.to_string())
+}
+/// Check that `secret` opens the destination's repository before it replaces the
+/// saved password. A destination without a repository yet accepts any password.
+pub fn check_password(store: &Store, d: &Destination, secret: &Secret) -> Result<()> {
+    validate_destination(d)?;
+    let _lock = RepoLock::acquire(store)?;
+    let mut args = repo_args(store, d)?;
+    // Restic reads the password from standard input when no other source is set.
+    if let Some(i) = args.iter().position(|a| a == "--password-command") {
+        args.drain(i..i + 2);
+    }
+    args.extend(["cat".into(), "config".into()]);
+    let mut command = clean_command("restic");
+    command
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    let mut child = command
+        .spawn()
+        .context("Install Restic to check the password")?;
+    if let Some(mut input) = child.stdin.take() {
+        let _ = writeln!(input, "{}", secret.expose());
+    }
+    let status = child.wait()?;
+    match status.code() {
+        Some(0) | Some(10) => Ok(()),
+        Some(12) => anyhow::bail!(
+            "This password does not open the existing repository. The saved password was kept."
+        ),
+        code => anyhow::bail!(
+            "{}",
+            restic_failure(code).unwrap_or(
+                "Could not open the repository to check the password. The saved password was kept."
+            )
+        ),
+    }
+}
 pub fn terminal_state(code: Option<i32>, cancel: bool, unreadable: u64) -> JobState {
-    if cancel {
+    // A cancel that arrives after Restic finished must not hide a written snapshot.
+    if cancel && code != Some(0) {
         JobState::Cancelled
     } else if code == Some(3) || (code == Some(0) && unreadable > 0) {
         JobState::Incomplete
@@ -502,12 +596,15 @@ fn execute_inner(
         "verify" => args.push("check".into()),
         "verify-full" => args.extend(["check".into(), "--read-data".into()]),
         "retention-preview" | "retention-apply" => {
+            args.extend(["forget".into(), "--tag".into(), tag]);
+            // Only this computer's snapshots: another machine backing up the same
+            // profile into this repository keeps its own history.
+            if let Some(host) = hostname() {
+                args.extend(["--host".into(), host]);
+            }
             args.extend([
-                "forget".into(),
-                "--tag".into(),
-                tag,
                 "--group-by".into(),
-                "tags".into(),
+                "host,tags".into(),
                 "--keep-last".into(),
                 p.keep_last.to_string(),
             ]);
@@ -566,8 +663,10 @@ fn execute_inner(
     let mut output = String::new();
     let mut errors = 0u64;
     let mut last_write = std::time::Instant::now();
+    let mut terminated = false;
     loop {
-        if cancel.load(Ordering::SeqCst) {
+        if cancel.load(Ordering::SeqCst) && !terminated {
+            terminated = true;
             terminate(&mut child);
         }
         match rx.recv_timeout(std::time::Duration::from_millis(100)) {
@@ -607,15 +706,26 @@ fn execute_inner(
     job.state = terminal_state(status.code(), cancel.load(Ordering::SeqCst), unreadable);
     job.finished = Some(now());
     if operation != "backup" {
-        job.result = serde_json::from_str(&output).unwrap_or_else(
-            |_| serde_json::json!({"message":"Operation completed; no structured result returned"}),
-        );
+        // `check` reports through its summary line; keep it when nothing else came.
+        if let Ok(v) = serde_json::from_str(&output) {
+            job.result = v;
+        } else if job.result.is_null() {
+            job.result =
+                serde_json::json!({"message":"Operation completed; no structured result returned"});
+        }
     }
-    job.message=match job.state {
-  JobState::Success=>"Completed".into(), JobState::Cancelled=>"Cancelled. A new run will reuse completed repository data; locks are not automatically removed.".into(),
-  JobState::Incomplete=>"Incomplete snapshot: some selected files could not be read. Review source permissions and run again.".into(),
-  _=>format!("Restic failed (exit {:?}; {errors} diagnostic lines suppressed). Check repository password, connectivity, access permissions and repository locks. Initialization is always explicit.",status.code()),
- };
+    job.message = match job.state {
+        JobState::Success => "Completed".into(),
+        JobState::Cancelled => "Cancelled. A new run will reuse completed repository data; locks are not automatically removed.".into(),
+        JobState::Incomplete => "Incomplete snapshot: some selected files could not be read. Review source permissions and run again.".into(),
+        _ => match restic_failure(status.code()) {
+            Some(reason) => reason.into(),
+            None => format!(
+                "Restic failed (exit {:?}; {errors} diagnostic lines suppressed). Check connectivity, access permissions and repository locks. Initialization is always explicit.",
+                status.code()
+            ),
+        },
+    };
     store.write_job(job)?;
     changed(job);
     Ok(())
@@ -648,7 +758,9 @@ mod tests {
     fn exit_states() {
         assert_eq!(terminal_state(Some(3), false, 0), JobState::Incomplete);
         assert_eq!(terminal_state(Some(0), false, 1), JobState::Incomplete);
-        assert_eq!(terminal_state(Some(0), true, 0), JobState::Cancelled);
+        assert_eq!(terminal_state(Some(0), true, 0), JobState::Success);
+        assert_eq!(terminal_state(Some(130), true, 0), JobState::Cancelled);
+        assert_eq!(terminal_state(None, true, 0), JobState::Cancelled);
         assert_eq!(terminal_state(Some(1), false, 0), JobState::Failed);
     }
     #[test]
@@ -658,6 +770,15 @@ mod tests {
             "/home/test/project/target/useful.txt"
         )));
         assert!(recognized_store(Path::new("/home/test/vm.qcow2")));
+        assert!(recognized_store(Path::new(
+            "/home/test/.var/app/com.usebottles.bottles/data/x"
+        )));
+        assert!(recognized_store(Path::new(
+            "/home/test/.local/share/containers/storage/overlay"
+        )));
+        assert!(!recognized_store(Path::new(
+            "/home/test/.var/app/org.other/x"
+        )));
     }
 }
 
@@ -748,14 +869,15 @@ mod fixture_tests {
         ];
         assert_eq!(select(&store, &c, &p).unwrap().preview.files, 1);
         let _active_database = fs::File::create(root.join("source/active.db")).unwrap();
+        let open = select(&store, &c, &p).unwrap();
+        assert!(open.preview.blocked.is_empty());
         assert!(
-            select(&store, &c, &p)
-                .unwrap()
-                .preview
-                .blocked
+            open.preview
+                .warnings
                 .iter()
                 .any(|message| message.contains("active.db"))
         );
+        assert!(!open.entries.iter().any(|e| e.ends_with("active.db")));
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

@@ -45,7 +45,7 @@ try:
  launch(['chromium','--headless','--disable-gpu','--disable-dev-shm-usage','--disable-background-networking','--disable-component-update','--disable-sync','--no-first-run','--user-data-dir='+str(root/'browser-profile'),'--window-size=1800,1100',f'http://127.0.0.1:{port}'],stdout=log)
  time.sleep(1)
  app=launch([repo/'target/debug/nyx-backup'],stdout=log);assert app.wait(timeout=35)==0,(root/'review.log').read_text()[-4000:]
- result=json.loads((root/'renders/result.json').read_text());assert result['pages_rendered']==8 and result['transport_fields']==6 and result['invalid_save_guard'] and result['ecosystem_escape']
+ result=json.loads((root/'renders/result.json').read_text());assert result['pages_rendered']==8 and result['transport_fields']==6 and result['invalid_save_guard'] and result['sheet_escape'] and result['command_palette']
  query=subprocess.run(['gdbus','call','--session','--dest','org.freedesktop.DBus','--object-path','/org/freedesktop/DBus','--method','org.freedesktop.DBus.GetConnectionUnixProcessID','io.github.design_nexus.nyx.Backup1'],env=env,text=True,capture_output=True)
  if query.returncode==0:worker=int(query.stdout.split('uint32 ')[1].split(',')[0].split(')')[0])
  print(json.dumps({'fixture':str(root),'renders':str(root/'renders'),'theme':args.theme,**result,'limits':['Scripted GTK fixture and software-rendered review; physical desktop input is not injected','No real user files or credentials selected']},indent=2))

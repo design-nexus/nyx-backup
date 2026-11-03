@@ -2,7 +2,9 @@
 
 A Rust/GTK4 desktop app for encrypted Restic backups of **selected user data and readable system metadata**. Standard Restic tools can read its repositories. The desktop app is unprivileged; broad complete-system, physical-machine and cross-PC recovery remain unqualified. Phase 2 adds staged selective restoration, dotfile diffs, conflict handling and rollback. Phase 3 adds package inventories, reviewed user/hardware migration planning and a versioned Setup consumer. Phase 4 adds a separate offline whole-disk recovery helper and bootable recovery kit, qualified against a disposable UEFI VM. Version 0.6.0 adds S3-compatible cloud destinations, explicit private-GitHub Backup settings sync and granted Control Center integration, with local security/failure/performance qualification.
 
-The interface has Overview, Backups, Restore and Settings. Backup and repository-administration jobs belong to an on-demand systemd user service, so closing the window does not stop them. Scheduling and retention deletion require explicit action.
+The window is a compact floating Nyx 2.0 window (760 × 560; the installer adds the Hyprland rule) with three views switched in the header: **Backups** (one card per profile with its last result, schedule, progress and actions, plus a setup checklist until the first backup), **Restore** (snapshots, an in-window file browser and reviewed restore plans, receipts and rollback) and **Activity** (every job and its details). Destinations, notifications and integrations live in the Settings card (Ctrl+,). Backup and repository-administration jobs belong to an on-demand systemd user service, so closing the window does not stop them. Scheduling and retention deletion require explicit action.
+
+![Backups](docs/screenshots/backups.png)
 
 ## Install and develop
 

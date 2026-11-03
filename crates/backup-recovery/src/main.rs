@@ -267,13 +267,21 @@ fn atomic(path: &Path, value: &impl Serialize) -> Result<()> {
     File::open(path.parent().context("Missing parent")?)?.sync_all()?;
     Ok(())
 }
-fn password(stdin: bool) -> Result<Vec<u8>> {
+fn password(stdin: bool, confirm: bool) -> Result<Vec<u8>> {
     let s = if stdin {
         let mut s = String::new();
         std::io::stdin().read_line(&mut s)?;
         s.trim_end_matches(['\r', '\n']).to_string()
     } else {
-        rpassword::prompt_password("Repository recovery password: ")?
+        let s = rpassword::prompt_password("Repository recovery password: ")?;
+        // A typo when creating a repository would make every capture in it unreadable.
+        if confirm {
+            ensure!(
+                rpassword::prompt_password("Repeat the recovery password: ")? == s,
+                "The passwords do not match; nothing was captured"
+            );
+        }
+        s
     };
     ensure!(
         !s.is_empty() && s.len() <= 4096 && !s.contains(['\n', '\r']),
@@ -303,7 +311,7 @@ fn restic(repo: &Path, secret: &[u8]) -> Result<Command> {
     c.args(["--repo"])
         .arg(repo)
         .args(["--password-file", "/proc/self/fd/3", "--no-cache"]);
-    c.stdin(Stdio::null()).stderr(Stdio::null());
+    c.stdin(Stdio::null()).stderr(Stdio::piped());
     unsafe {
         c.pre_exec(move || {
             let fd = input.as_raw_fd();
@@ -322,10 +330,22 @@ fn run(mut c: Command) -> Result<Vec<u8>> {
     let out = c.output()?;
     ensure!(
         out.status.success(),
-        "Restic recovery operation failed ({}); check repository, password, free space and locks. No replacement repository is initialized.",
-        out.status
+        "Restic recovery operation failed ({}): {}\nNo replacement repository is initialized.",
+        out.status,
+        stderr_excerpt(&out.stderr)
     );
     Ok(out.stdout)
+}
+/// The last lines Restic wrote, bounded; it never prints the password.
+fn stderr_excerpt(stderr: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stderr);
+    let lines: Vec<_> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    let tail = lines[lines.len().saturating_sub(4)..].join("\n");
+    if tail.is_empty() {
+        "check repository, password, free space and locks".into()
+    } else {
+        tail.chars().take(800).collect()
+    }
 }
 fn exact(s: &str) -> Result<()> {
     ensure!(
@@ -357,7 +377,9 @@ fn dump(repo: &Path, secret: &[u8], snapshot: &str, name: &str, path: &Path) -> 
         .mode(0o600)
         .open(path)?;
     let mut c = restic(repo, secret)?;
-    c.args(["dump", snapshot, name]).stdout(Stdio::from(f));
+    c.args(["dump", snapshot, name])
+        .stdout(Stdio::from(f))
+        .stderr(Stdio::null());
     let status = c.status()?;
     ensure!(
         status.success(),
@@ -378,6 +400,17 @@ fn capture(
         source.readonly,
         "Capture requires a kernel read-only source disk; boot offline and set it read-only first"
     );
+    // Check the repository before spending the time and space on a full copy.
+    if initialize {
+        ensure!(
+            !repo.exists(),
+            "Explicit initialization requires a new repository path"
+        );
+    } else {
+        let mut c = restic(repo, secret)?;
+        c.args(["cat", "config"]).stdout(Stdio::null());
+        run(c).context("Could not open the recovery repository; nothing was captured")?;
+    }
     // Repository and work must be on mounted storage, never on the source being copied.
     private_dir(work)?;
     let image = work.join("disk.img");
@@ -399,10 +432,6 @@ fn capture(
     let manifest=Manifest{format:"nyx-recovery-disk".into(),version:1,bytes:source.bytes,sha256:hash(&mut out,source.bytes)?,source,coverage:"Offline exact whole-disk bytes; target geometry must match. No hardware adaptation or physical-machine recovery qualification.".into()};
     atomic(&work.join("manifest.json"), &manifest)?;
     if initialize {
-        ensure!(
-            !repo.exists(),
-            "Explicit initialization requires a new repository path"
-        );
         let mut c = restic(repo, secret)?;
         c.arg("init");
         run(c)?;
@@ -567,7 +596,7 @@ fn execute(args: &Args) -> Result<serde_json::Value> {
             repo,
             work,
             *initialize,
-            &password(args.password_stdin)?,
+            &password(args.password_stdin, *initialize)?,
         ),
         Action::Plan {
             repo,
@@ -579,7 +608,7 @@ fn execute(args: &Args) -> Result<serde_json::Value> {
             snapshot,
             device,
             work,
-            &password(args.password_stdin)?,
+            &password(args.password_stdin, false)?,
         ),
         _ => unreachable!(),
     }

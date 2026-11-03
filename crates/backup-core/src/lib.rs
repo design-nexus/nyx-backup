@@ -28,9 +28,10 @@ pub fn valid_id(s: &str) -> Result<()> {
     ensure!(
         !s.is_empty()
             && s.len() <= 64
+            && !s.starts_with('-')
             && s.bytes()
                 .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'),
-        "Use 1–64 letters, digits, dashes or underscores for IDs"
+        "Use 1–64 letters, digits, dashes or underscores for IDs, not starting with a dash"
     );
     Ok(())
 }
@@ -80,10 +81,17 @@ impl Store {
             return Ok(vec![]);
         }
         let mut jobs = Vec::new();
-        for e in fs::read_dir(p)? {
-            let p = e?.path();
+        for e in fs::read_dir(p)?.flatten() {
+            let p = e.path();
             if p.extension().is_some_and(|x| x == "json") {
-                jobs.push(serde_json::from_slice::<Job>(&fs::read(p)?)?);
+                // One damaged or newer-format journal must not hide every other job.
+                match fs::read(&p)
+                    .map_err(anyhow::Error::from)
+                    .and_then(|b| Ok(serde_json::from_slice::<Job>(&b)?))
+                {
+                    Ok(j) => jobs.push(j),
+                    Err(e) => eprintln!("Skipping unreadable job {}: {e}", p.display()),
+                }
             }
         }
         jobs.sort_by_key(|j| std::cmp::Reverse(j.started));
@@ -251,7 +259,19 @@ impl Destination {
                 path,
             } => {
                 if !endpoint.is_empty() {
+                    // The URL parser silently strips tabs and newlines, but the raw string
+                    // is written into the Rclone configuration.
+                    ensure!(
+                        !endpoint
+                            .chars()
+                            .any(|c| c.is_control() || c.is_whitespace()),
+                        "S3 endpoint cannot contain spaces or control characters"
+                    );
                     let url = url::Url::parse(endpoint).context("Use an HTTPS S3 endpoint")?;
+                    ensure!(
+                        url.as_str().trim_end_matches('/') == endpoint.trim_end_matches('/'),
+                        "Write the S3 endpoint in its plain form, such as https://s3.example.com"
+                    );
                     let loopback = matches!(url.host_str(), Some("127.0.0.1" | "[::1]" | "::1"));
                     ensure!(
                         (url.scheme() == "https" || (url.scheme() == "http" && loopback))
@@ -441,10 +461,45 @@ pub struct Health {
     pub warning: Option<String>,
     #[serde(default)]
     pub storage: Option<serde_json::Value>,
+    #[serde(default)]
+    pub profiles: Vec<ProfileHealth>,
+}
+/// What one profile's card shows: its latest backup and repository figures.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ProfileHealth {
+    pub profile: String,
+    pub last_backup: Option<Job>,
+    pub last_success: Option<u64>,
+    pub storage: Option<serde_json::Value>,
 }
 pub fn health(store: &Store) -> Result<Health> {
     let jobs = store.jobs()?;
+    let mut profiles: Vec<ProfileHealth> = Vec::new();
+    for j in &jobs {
+        let i = match profiles.iter().position(|p| p.profile == j.profile) {
+            Some(i) => i,
+            None => {
+                profiles.push(ProfileHealth {
+                    profile: j.profile.clone(),
+                    ..Default::default()
+                });
+                profiles.len() - 1
+            }
+        };
+        let p = &mut profiles[i];
+        // Jobs are newest first, so the first match of each kind is the latest.
+        if j.operation == "backup" && j.state != JobState::Running && p.last_backup.is_none() {
+            p.last_backup = Some(j.clone());
+        }
+        if j.operation == "backup" && j.state == JobState::Success && p.last_success.is_none() {
+            p.last_success = Some(j.finished.unwrap_or(j.started));
+        }
+        if j.operation == "stats" && j.state == JobState::Success && p.storage.is_none() {
+            p.storage = Some(j.result.clone());
+        }
+    }
     Ok(Health {
+        profiles,
         version: 1,
         coverage: "Selected user data and readable system metadata; no system recovery guarantee"
             .into(),
@@ -473,3 +528,56 @@ pub fn health(store: &Store) -> Result<Health> {
 }
 
 pub mod migration;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn s3(endpoint: &str) -> Destination {
+        Destination {
+            id: "cloud".into(),
+            name: "Cloud".into(),
+            kind: DestinationKind::S3 {
+                endpoint: endpoint.into(),
+                region: "us-east-1".into(),
+                bucket: "bucket".into(),
+                path: "repo".into(),
+            },
+        }
+    }
+    #[test]
+    fn s3_endpoint_rejects_hidden_config_lines() {
+        assert!(s3("https://s3.example.com").validate().is_ok());
+        assert!(s3("https://s3.example.com/").validate().is_ok());
+        assert!(
+            s3("https://s3.example.com\nenv_auth=true")
+                .validate()
+                .is_err()
+        );
+        assert!(s3("https://s3.example.com\tx").validate().is_err());
+    }
+    #[test]
+    fn ids_cannot_look_like_options() {
+        assert!(valid_id("personal-1").is_ok());
+        assert!(valid_id("-x").is_err());
+        assert!(valid_id("--wait").is_err());
+    }
+    #[test]
+    fn damaged_job_files_are_skipped() {
+        let dir = std::env::temp_dir().join(format!("nyx-backup-core-{}", id()));
+        let store = Store {
+            config: dir.join("config"),
+            state: dir.join("state"),
+            cache: dir.join("cache"),
+        };
+        let mut job = Job::new("personal", "backup");
+        job.state = JobState::Success;
+        store.write_job(&job).unwrap();
+        fs::write(store.state.join("jobs/broken.json"), b"{not json").unwrap();
+        let jobs = store.jobs().unwrap();
+        assert_eq!(jobs.len(), 1);
+        let h = health(&store).unwrap();
+        assert_eq!(h.profiles.len(), 1);
+        assert!(h.profiles[0].last_success.is_some());
+        let _ = fs::remove_dir_all(dir);
+    }
+}

@@ -75,6 +75,18 @@ impl AdminRequest {
         }
         if let Some(restore) = &self.restore {
             restore.validate()?;
+            // Mapped migration plans are prepared only by the migration job, which
+            // checks the source inventory and adapts the staged files.
+            anyhow::ensure!(
+                !matches!(
+                    restore,
+                    backup_restore::Request::Plan {
+                        mode: backup_restore::Mode::MigratedUserData(_),
+                        ..
+                    }
+                ),
+                "Prepare migrations through the migration workflow"
+            );
             anyhow::ensure!(
                 self.operation == restore.operation(),
                 "Restore request operation does not match its payload"
@@ -110,16 +122,17 @@ pub fn configuration_file(store: &Store) -> std::path::PathBuf {
     std::fs::canonicalize(&path).unwrap_or(path)
 }
 pub fn admin_socket(store: &Store) -> std::path::PathBuf {
-    use std::hash::{Hash, Hasher};
-    let mut hash = std::collections::hash_map::DefaultHasher::new();
-    store.state.hash(&mut hash);
+    // A stable digest: the GUI, CLI and daemon may be built by different toolchains.
+    use sha2::{Digest, Sha256};
+    use std::os::unix::ffi::OsStrExt;
+    let digest = Sha256::digest(store.state.as_os_str().as_bytes());
     let runtime = std::env::var_os("XDG_RUNTIME_DIR")
         .filter(|s| !s.is_empty())
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| format!("/run/user/{}", unsafe { libc::geteuid() }).into());
     runtime
         .join("nyx-backup")
-        .join(format!("admin-{:016x}.sock", hash.finish()))
+        .join(format!("admin-{}.sock", &format!("{digest:x}")[..16]))
 }
 pub fn admin_start(
     profile: &str,

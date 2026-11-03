@@ -493,12 +493,17 @@ pub fn read(
             let directory = store.state.join("migrations");
             let mut bundles = Vec::new();
             if directory.exists() {
-                for entry in fs::read_dir(directory)? {
-                    let path = entry?.path();
+                for entry in fs::read_dir(directory)?.flatten() {
+                    let path = entry.path();
                     if path.extension().is_some_and(|s| s == "json") {
-                        let bundle: Bundle = serde_json::from_slice(&fs::read(path)?)?;
-                        bundle.validate()?;
-                        if bundle.profile == p.id {
+                        // One damaged bundle must not hide the others.
+                        let Ok(bundle) = fs::read(&path)
+                            .map_err(anyhow::Error::from)
+                            .and_then(|b| Ok(serde_json::from_slice::<Bundle>(&b)?))
+                        else {
+                            continue;
+                        };
+                        if bundle.validate().is_ok() && bundle.profile == p.id {
                             bundles.push(serde_json::json!({"id":bundle.id,"created":bundle.created,"snapshot":bundle.snapshot,"restore_plan":bundle.restore_plan}));
                         }
                     }

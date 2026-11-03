@@ -50,6 +50,8 @@ def build(output,kernel_version=None,init=None,extras=None,fixture=False,console
    if not p.exists():p.symlink_to(str(resolved))
   # Helpers always execute our fixed Restic binary; no host paths are bind-mounted.
   copy_elf(tree,'/usr/bin/restic');helper=ROOT/'target/release/nyx-backup-recovery'
+  # Launched from the desktop, PATH may not include the user's install folder.
+  if not helper.is_file():helper=pathlib.Path(os.environ.get('NYX_BIN_DIR',pathlib.Path.home()/'.local/bin'))/'nyx-backup-recovery'
   if not helper.is_file():helper=pathlib.Path(shutil.which('nyx-backup-recovery') or '/missing/nyx-backup-recovery')
   copy_elf(tree,helper)
   original=tree/str(helper).lstrip('/');shutil.move(original,tree/'usr/bin/nyx-backup-recovery')

@@ -14,6 +14,16 @@ struct Api {
 fn failure(e: impl std::fmt::Display) -> zbus::fdo::Error {
     zbus::fdo::Error::Failed(e.to_string())
 }
+/// Frees the worker slot however the worker ends, including a panic.
+struct ClearActive(Arc<Mutex<Option<(String, Arc<AtomicBool>)>>>);
+impl Drop for ClearActive {
+    fn drop(&mut self) {
+        match self.0.lock() {
+            Ok(mut a) => *a = None,
+            Err(poisoned) => *poisoned.into_inner() = None,
+        }
+    }
+}
 async fn authorize(c: &Connection, h: &Header<'_>) -> zbus::fdo::Result<()> {
     let sender = h
         .sender()
@@ -29,7 +39,18 @@ async fn authorize(c: &Connection, h: &Header<'_>) -> zbus::fdo::Result<()> {
     }
     Ok(())
 }
+fn orphaned(job: &mut Job) {
+    job.state = JobState::Interrupted;
+    job.finished.get_or_insert_with(now);
+    job.message = "The worker stopped before recording a result. Start the operation again; repository locks were preserved.".into();
+}
 impl Api {
+    fn active_id(&self) -> Option<String> {
+        self.active
+            .lock()
+            .ok()
+            .and_then(|a| a.as_ref().map(|(id, _)| id.clone()))
+    }
     fn launch(
         &self,
         id: &str,
@@ -65,6 +86,7 @@ impl Api {
         let operation = operation.to_string();
         let handle = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
+            let _clear = ClearActive(active);
             let emit = |job: &Job| {
                 if let Ok(json) = serde_json::to_string(job) {
                     let _ = handle.block_on(async {
@@ -74,29 +96,33 @@ impl Api {
                 }
             };
             emit(&job);
-            let result = if let Some(request) = migration {
-                backup_migrate::execute_locked(
-                    check, &store, &config, &p, request, cancel, &mut job, emit,
-                )
-            } else {
-                match restore {
-                    Some(request) => backup_restore::execute_locked(
+            let run = std::panic::AssertUnwindSafe(|| {
+                if let Some(request) = migration {
+                    backup_migrate::execute_locked(
                         check, &store, &config, &p, request, cancel, &mut job, emit,
-                    ),
-                    None => backup_engine::execute_locked(
-                        check, &store, &config, &p, &operation, cancel, &mut job, emit,
-                    ),
+                    )
+                } else {
+                    match restore {
+                        Some(request) => backup_restore::execute_locked(
+                            check, &store, &config, &p, request, cancel, &mut job, emit,
+                        ),
+                        None => backup_engine::execute_locked(
+                            check, &store, &config, &p, &operation, cancel, &mut job, emit,
+                        ),
+                    }
                 }
-            };
+            });
+            let result = std::panic::catch_unwind(run).unwrap_or_else(|_| {
+                Err(anyhow::anyhow!(
+                    "The worker stopped unexpectedly. Start the operation again; repository locks were preserved."
+                ))
+            });
             if let Err(e) = result {
                 job.state = JobState::Failed;
                 job.finished = Some(now());
                 job.message = e.to_string();
                 let _ = store.write_job(&job);
                 emit(&job);
-            }
-            if let Ok(mut a) = active.lock() {
-                *a = None;
             }
             if config.notifications && operation == "backup" {
                 backup_system::notify(job.state == JobState::Success);
@@ -121,12 +147,25 @@ impl Api {
         #[zbus(header)] h: Header<'_>,
     ) -> zbus::fdo::Result<String> {
         authorize(c, &h).await?;
-        let mut health = health(&self.store).map_err(failure)?;
-        health.next_schedule = backup_system::schedules()
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        Ok(serde_json::to_string(&health).map_err(failure)?)
+        let store = self.store.clone();
+        let active = self.active_id();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
+            let mut health = health(&store)?;
+            if let Some(job) = &mut health.active {
+                if active.as_deref() != Some(job.id.as_str()) {
+                    orphaned(job);
+                    health.active = None;
+                }
+            }
+            health.next_schedule = backup_system::schedules()
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            Ok(serde_json::to_string(&health)?)
+        })
+        .await
+        .map_err(failure)?
+        .map_err(failure)
     }
     async fn destinations(
         &self,
@@ -134,9 +173,15 @@ impl Api {
         #[zbus(header)] h: Header<'_>,
     ) -> zbus::fdo::Result<String> {
         authorize(c, &h).await?;
-        let config = self.store.load().map_err(failure)?;
-        let v:Vec<_>=config.destinations.iter().map(|d|serde_json::json!({"id":d.id,"name":d.name,"mounted_destination_available":backup_system::validate_destination(d).is_ok()})).collect();
-        Ok(serde_json::json!({"version":1,"destinations":v}).to_string())
+        let store = self.store.clone();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
+            let config = store.load()?;
+            let v:Vec<_>=config.destinations.iter().map(|d|serde_json::json!({"id":d.id,"name":d.name,"mounted_destination_available":backup_system::validate_destination(d).is_ok()})).collect();
+            Ok(serde_json::json!({"version":1,"destinations":v}).to_string())
+        })
+        .await
+        .map_err(failure)?
+        .map_err(failure)
     }
     async fn jobs(
         &self,
@@ -153,7 +198,14 @@ impl Api {
         #[zbus(header)] h: Header<'_>,
     ) -> zbus::fdo::Result<String> {
         authorize(c, &h).await?;
-        Ok(serde_json::to_string(&self.store.job(id).map_err(failure)?).map_err(failure)?)
+        let mut job = self.store.job(id).map_err(failure)?;
+        if job.state == JobState::Running && self.active_id().as_deref() != Some(id) {
+            // A journal left "running" by a worker that can no longer write it
+            // would otherwise keep every waiting client polling forever.
+            orphaned(&mut job);
+            let _ = self.store.write_job(&job);
+        }
+        Ok(serde_json::to_string(&job).map_err(failure)?)
     }
     async fn preview(
         &self,
@@ -415,7 +467,11 @@ impl Control {
             match action {
                 "status" => {
                     anyhow::ensure!(a.job.is_none(), "Status does not accept a job");
-                    backup_service::integration::summary(&self.api.store, &g)
+                    let store = self.api.store.clone();
+                    tokio::task::spawn_blocking(move || {
+                        backup_service::integration::summary(&store, &g)
+                    })
+                    .await?
                 }
                 "cancel" => {
                     let id = a.job.context("Choose a job to cancel")?;

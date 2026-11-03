@@ -1,5 +1,305 @@
-window.backup-window .card { padding: 14px; border-radius: 11px; background: @theme_card; }
-window.backup-window .settings-navigation { background: @theme_bg; padding: 8px; }
-window.backup-window .nav-item { padding: 6px 10px; border: none; background: transparent; }
-window.backup-window .nav-item.active { background: alpha(@theme_accent, 0.14); color: @theme_accent; }
-window.backup-window textview { padding: 8px; background: @theme_card; }
+/* Backup on the Nyx 2.0 sheet: one blended surface, cards for profiles,
+ * accent only for state. Colours are theme tokens or mixes of them. */
+
+/* ---------- Header ---------- */
+
+window.backup-window .view-switch button.segment {
+  min-width: 76px;
+}
+
+/* ---------- Views ---------- */
+
+window.backup-window .view-body {
+  padding: 12px 16px 20px;
+}
+
+window.backup-window .view-toolbar {
+  padding: 6px 16px 0;
+  min-height: 34px;
+}
+
+window.backup-window .toolbar-title {
+  font-weight: 600;
+}
+
+/* ---------- Health line ---------- */
+
+window.backup-window .health-line {
+  padding: 0 4px;
+  min-height: 24px;
+}
+
+window.backup-window .health-title {
+  font-weight: 500;
+}
+
+window.backup-window .health-note,
+window.backup-window .schedule-text,
+window.backup-window .job-time {
+  color: @theme_text_tertiary;
+  font-size: 0.885em;
+  font-feature-settings: "tnum";
+}
+
+/* ---------- Profile and setup cards ---------- */
+
+window.backup-window .card {
+  padding: 14px;
+}
+
+window.backup-window .card-icon {
+  color: @theme_accent;
+  -gtk-icon-size: 18px;
+  margin-top: 1px;
+}
+
+window.backup-window .card-title {
+  font-weight: 600;
+}
+
+window.backup-window .card-subtitle,
+window.backup-window .status-text,
+window.backup-window .progress-text,
+window.backup-window .job-detail {
+  color: @theme_dim_text;
+  font-size: 0.92em;
+}
+
+window.backup-window .progress-text {
+  font-feature-settings: "tnum";
+}
+
+window.backup-window .card-status {
+  padding-left: 30px;
+}
+
+window.backup-window .profile-card > box:last-child {
+  padding-left: 30px;
+}
+
+window.backup-window button.run-button {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+}
+
+window.backup-window .job-progress > trough,
+window.backup-window .job-progress > trough > progress {
+  min-height: 4px;
+}
+
+window.backup-window .setup-card {
+  padding: 16px 16px 10px;
+}
+
+window.backup-window .setup-step {
+  padding: 8px 0;
+}
+
+window.backup-window .step-title {
+  font-weight: 500;
+}
+
+window.backup-window .step-title.done {
+  color: @theme_dim_text;
+}
+
+window.backup-window .step-desc {
+  color: @theme_dim_text;
+  font-size: 0.92em;
+}
+
+/* ---------- State colours ---------- */
+
+window.backup-window image.ok,
+window.backup-window .health-icon.ok {
+  color: @theme_success;
+}
+
+window.backup-window image.warning {
+  color: @theme_warning;
+}
+
+window.backup-window image.danger {
+  color: @theme_danger;
+}
+
+window.backup-window image.accent {
+  color: @theme_accent;
+}
+
+window.backup-window image.pending {
+  color: @theme_text_tertiary;
+}
+
+window.backup-window .danger-text {
+  color: @theme_danger;
+}
+
+/* ---------- Lists ---------- */
+
+window.backup-window list.job-list,
+window.backup-window list.snapshot-list,
+window.backup-window list.file-list {
+  background: transparent;
+}
+
+window.backup-window list.job-list > row,
+window.backup-window list.snapshot-list > row,
+window.backup-window list.file-list > row {
+  margin-bottom: 2px;
+}
+
+window.backup-window .job-row {
+  padding: 8px 10px;
+  min-height: 36px;
+}
+
+window.backup-window .file-row {
+  padding: 4px 10px;
+  min-height: 30px;
+}
+
+window.backup-window .job-title,
+window.backup-window .file-name {
+  font-weight: 500;
+}
+
+window.backup-window .crumbs {
+  padding: 4px 12px;
+}
+
+window.backup-window button.crumb {
+  padding: 0 6px;
+  min-height: 28px;
+  color: @theme_dim_text;
+}
+
+window.backup-window button.crumb.last {
+  color: @theme_text;
+  font-weight: 500;
+}
+
+window.backup-window .crumb-sep {
+  color: @theme_text_tertiary;
+}
+
+window.backup-window .selection-bar {
+  padding: 8px 16px 10px;
+  background: @theme_bg;
+}
+
+/* ---------- Menus ---------- */
+
+window.backup-window button.menu-item {
+  min-height: 30px;
+  padding: 0 12px;
+}
+
+window.backup-window button.danger-item {
+  color: @theme_danger;
+}
+
+/* ---------- Sheets ---------- */
+
+/* The window's own surface, like the Settings card: under Follow Omarchy the
+ * popover colour is darker than the window, so a sheet on it looked like
+ * another theme. */
+window.backup-window .dialog-card.backup-sheet {
+  padding: 20px 20px 16px;
+  background: @theme_bg;
+}
+
+window.backup-window .backup-sheet .section-title {
+  margin-bottom: 2px;
+}
+
+window.backup-window .sheet-footer {
+  margin-top: 6px;
+}
+
+window.backup-window .sheet-error {
+  color: @theme_danger;
+}
+
+window.backup-window .field-title {
+  font-weight: 500;
+  font-size: 0.92em;
+}
+
+window.backup-window .field-hint {
+  color: @theme_dim_text;
+  font-size: 0.885em;
+}
+
+window.backup-window .form-option {
+  padding: 6px 0;
+  min-height: 0;
+  background: transparent;
+}
+
+window.backup-window .form-text-scroll,
+window.backup-window textview.form-text,
+window.backup-window textview.form-text > text {
+  background: @field;
+  border-radius: var(--nyx-radius-small);
+}
+
+window.backup-window textview.form-text {
+  padding: 6px 8px;
+}
+
+window.backup-window .source-list {
+  background: @field;
+  border-radius: var(--nyx-radius-small);
+  padding: 4px 4px 4px 10px;
+}
+
+window.backup-window .source-row {
+  min-height: 30px;
+}
+
+window.backup-window .path-line {
+  font-size: 0.92em;
+}
+
+window.backup-window .compact-list {
+  background: @field;
+  border-radius: var(--nyx-radius-small);
+  padding: 6px 10px;
+}
+
+window.backup-window .plan-row {
+  padding: 4px 0;
+  min-height: 30px;
+}
+
+window.backup-window .facts {
+  margin-top: 4px;
+}
+
+window.backup-window .code-block {
+  padding: 10px 12px;
+  font-size: 0.86em;
+}
+
+window.backup-window .tag {
+  padding: 1px 7px;
+}
+
+/* ---------- Settings card ---------- */
+
+/* The 2.0 button padding would make each accent swatch 46 px wide, and the row
+ * of them wider than the card in a 760 px window. */
+window.backup-window button.accent-swatch {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+}
+
+/* ---------- Toast ---------- */
+
+window.backup-window .toast {
+  margin: 0 18px 18px;
+  padding: 10px 16px;
+}

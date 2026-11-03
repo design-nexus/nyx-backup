@@ -1,7 +1,8 @@
 //! Desktop credentials, mount binding, user timers, and readable metadata.
 use anyhow::{Context, Result, ensure};
 use backup_core::*;
-use nyx_sync::{Secret, lookup_secret, store_secret};
+pub use nyx_sync::Secret;
+use nyx_sync::{lookup_secret, store_secret};
 use std::{
     fs,
     io::{Read, Write},
@@ -14,23 +15,38 @@ pub fn generated_secret() -> Result<Secret> {
     fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
     Secret::new(bytes.iter().map(|b| format!("{b:02x}")).collect::<String>())
 }
+const KEYRING: &str =
+    "Your keyring (Secret Service) isn't available. Start or unlock it, then try again.";
+/// Save the first repository password for a destination. Secret Service would
+/// silently replace an existing item, which can make every snapshot unreadable,
+/// so an existing password is only changed through [`replace_password`].
 pub fn save_password(id: &str, secret: &Secret) -> Result<()> {
+    valid_id(id)?;
+    ensure!(
+        !has_secret(id, "repository")?,
+        "A repository password is already saved for this destination. Replace it only with the password that opens the existing repository."
+    );
+    store_secret("nyx-backup", id, "repository", secret)
+}
+/// Replace a saved repository password. Callers must first prove the new
+/// password opens the repository (or that no repository exists yet).
+pub fn replace_password(id: &str, secret: &Secret) -> Result<()> {
     valid_id(id)?;
     store_secret("nyx-backup", id, "repository", secret)
 }
-/// Search metadata without asking Secret Service to unlock a collection.
-/// Scheduled work must fail promptly instead of waiting for an unlock prompt.
-pub fn ensure_secret_unlocked(id: &str, kind: &str) -> Result<()> {
+/// Whether a credential is saved, locked or not, without asking to unlock it.
+pub fn has_secret(id: &str, kind: &str) -> Result<bool> {
     valid_id(id)?;
     zbus::block_on(async {
-        let connection = zbus::Connection::session().await?;
+        let connection = zbus::Connection::session().await.context(KEYRING)?;
         let proxy = zbus::Proxy::new(
             &connection,
             "org.freedesktop.secrets",
             "/org/freedesktop/secrets",
             "org.freedesktop.Secret.Service",
         )
-        .await?;
+        .await
+        .context(KEYRING)?;
         for application in ["nyx-backup", "nixe-backup"] {
             let attributes = std::collections::HashMap::from([
                 ("application", application),
@@ -38,9 +54,44 @@ pub fn ensure_secret_unlocked(id: &str, kind: &str) -> Result<()> {
                 ("kind", kind),
             ]);
             let (unlocked, locked): (Vec<zbus::OwnedObjectPath>, Vec<zbus::OwnedObjectPath>) =
-                proxy.call("SearchItems", &(attributes,)).await?;
+                proxy
+                    .call("SearchItems", &(attributes,))
+                    .await
+                    .context(KEYRING)?;
+            if !unlocked.is_empty() || !locked.is_empty() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    })
+}
+/// Search metadata without asking Secret Service to unlock a collection.
+/// Scheduled work must fail promptly instead of waiting for an unlock prompt.
+pub fn ensure_secret_unlocked(id: &str, kind: &str) -> Result<()> {
+    valid_id(id)?;
+    let legacy = zbus::block_on(async {
+        let connection = zbus::Connection::session().await.context(KEYRING)?;
+        let proxy = zbus::Proxy::new(
+            &connection,
+            "org.freedesktop.secrets",
+            "/org/freedesktop/secrets",
+            "org.freedesktop.Secret.Service",
+        )
+        .await
+        .context(KEYRING)?;
+        for application in ["nyx-backup", "nixe-backup"] {
+            let attributes = std::collections::HashMap::from([
+                ("application", application),
+                ("account", id),
+                ("kind", kind),
+            ]);
+            let (unlocked, locked): (Vec<zbus::OwnedObjectPath>, Vec<zbus::OwnedObjectPath>) =
+                proxy
+                    .call("SearchItems", &(attributes,))
+                    .await
+                    .context(KEYRING)?;
             if !unlocked.is_empty() {
-                return Ok(());
+                return Ok(application != "nyx-backup");
             }
             ensure!(
                 locked.is_empty(),
@@ -48,7 +99,13 @@ pub fn ensure_secret_unlocked(id: &str, kind: &str) -> Result<()> {
             );
         }
         anyhow::bail!("No saved credential for this destination. Set it up in Backup first.")
-    })
+    })?;
+    if legacy {
+        // Restic and Rclone read credentials through `helper`, which only knows the
+        // current name; copy an item saved before the rename to it.
+        lookup_secret("nyx-backup", id, kind)?;
+    }
+    Ok(())
 }
 pub fn password(id: &str) -> Result<Secret> {
     ensure_secret_unlocked(id, "repository")?;
@@ -467,7 +524,10 @@ pub fn schedule(store: &Store, p: &Profile, enable: bool) -> Result<()> {
         !ctl.to_string_lossy().contains(['\n', '\r', '%', '"', '\\']),
         "Unsupported installation path"
     );
-    atomic(
+    // A shared user directory: create it with normal permissions; only the unit
+    // files themselves need writing atomically.
+    fs::create_dir_all(&dir)?;
+    unit_file(
         &dir.join(format!("{name}.service")),
         format!(
             "[Unit]\nDescription=Nyx Backup profile {}\n[Service]\nType=oneshot\nExecStart=\"{}\" backup {} --wait\n",
@@ -476,7 +536,7 @@ pub fn schedule(store: &Store, p: &Profile, enable: bool) -> Result<()> {
             p.id
         ),
     )?;
-    atomic(
+    unit_file(
         &dir.join(format!("{name}.timer")),
         format!(
             "[Unit]\nDescription=Nyx Backup schedule {}\n[Timer]\nOnCalendar={calendar}\nPersistent=true\nRandomizedDelaySec=120\n[Install]\nWantedBy=timers.target\n",
@@ -492,6 +552,10 @@ pub fn schedule(store: &Store, p: &Profile, enable: bool) -> Result<()> {
         checked(c, "Enable schedule")?;
     }
     let _ = store;
+    Ok(())
+}
+fn unit_file(path: &Path, text: String) -> Result<()> {
+    nyx_core::cmd::atomic_write(path, text)?;
     Ok(())
 }
 pub fn schedules() -> serde_json::Value {

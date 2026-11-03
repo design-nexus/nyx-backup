@@ -91,6 +91,9 @@ enum Cmd {
         generate: bool,
         #[arg(long)]
         stdin: bool,
+        /// Replace a saved password; the new one must open the existing repository.
+        #[arg(long, conflicts_with = "generate")]
+        replace: bool,
     },
     ExportPassword {
         destination: String,
@@ -540,7 +543,17 @@ fn setup_command(action: &SetupCmd) -> Result<serde_json::Value> {
             let _ = backup_migrate::setup_preview(&bundle)?;
             let plan = bundle
                 .restore_plan
+                .clone()
                 .context("This bundle has no staged configuration plan")?;
+            let staged = backup_service::restore_read(
+                &bundle.profile,
+                backup_restore::Request::Inspect { plan: plan.clone() },
+            )?;
+            ensure!(
+                staged["snapshot"] == bundle.snapshot.as_str()
+                    && staged["mode"].get("migrated_user_data").is_some(),
+                "The bundle's configuration plan is not the migration plan prepared for its snapshot"
+            );
             let id = backup_service::restore_start(
                 &bundle.profile,
                 backup_restore::Request::Apply {
@@ -623,14 +636,7 @@ fn read_secret(stdin: bool, prompt: &str) -> Result<nyx_sync::Secret> {
     nyx_sync::Secret::new(value)
 }
 fn wait_job(id: &str) -> Result<serde_json::Value> {
-    loop {
-        let v: serde_json::Value =
-            serde_json::from_str(&backup_service::client_call("Job", (id,))?)?;
-        if v["state"] != "running" {
-            return Ok(v);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(300));
-    }
+    backup_service::wait_job(id)
 }
 fn start(profile: &str, op: &str, wait: bool) -> Result<serde_json::Value> {
     let id = backup_service::start(profile, op)?;
@@ -687,7 +693,17 @@ fn main() {
 }
 fn run(a: &Args) -> Result<serde_json::Value> {
     let store = Store::default();
-    let mut c = store.load()?;
+    // Loaded only by the commands that need it, so `config import` and the
+    // read-only commands still work when the saved configuration is invalid.
+    let config = std::cell::OnceCell::new();
+    let load = || -> Result<Config> {
+        if let Some(c) = config.get() {
+            return Ok(Config::clone(c));
+        }
+        let c = store.load()?;
+        let _ = config.set(c.clone());
+        Ok(c)
+    };
     let ok = || serde_json::json!({"version":1,"ok":true});
     let parse = |s: String| -> Result<serde_json::Value> { Ok(serde_json::from_str(&s)?) };
     match &a.command {
@@ -698,10 +714,10 @@ fn run(a: &Args) -> Result<serde_json::Value> {
         Cmd::Status => parse(backup_service::status()?),
         Cmd::Jobs => parse(backup_service::client_call("Jobs", ())?),
         Cmd::Inventory => Ok(inventory()),
-        Cmd::Profiles => Ok(serde_json::to_value(c.profiles)?),
-        Cmd::Destinations => Ok(serde_json::to_value(c.destinations)?),
+        Cmd::Profiles => Ok(serde_json::to_value(load()?.profiles)?),
+        Cmd::Destinations => Ok(serde_json::to_value(load()?.destinations)?),
         Cmd::Config { action } => match action {
-            ConfigCmd::Show => Ok(serde_json::to_value(c)?),
+            ConfigCmd::Show => Ok(serde_json::to_value(load()?)?),
             ConfigCmd::Import { path } => {
                 let new: Config = toml::from_str(&fs::read_to_string(path)?)?;
                 store.save(&new)?;
@@ -728,18 +744,25 @@ fn run(a: &Args) -> Result<serde_json::Value> {
             destination,
             generate,
             stdin,
+            replace,
         } => {
-            c.destination(destination)?;
+            let c = load()?;
+            let d = c.destination(destination)?;
             let secret = if *generate {
                 generated_secret()?
             } else {
                 read_secret(*stdin, "Repository password: ")?
             };
-            save_password(destination, &secret)?;
+            if *replace {
+                backup_engine::check_password(&store, d, &secret)?;
+                replace_password(destination, &secret)?;
+            } else {
+                save_password(destination, &secret)?;
+            }
             Ok(ok())
         }
         Cmd::ExportPassword { destination, path } => {
-            c.destination(destination)?;
+            load()?.destination(destination)?;
             export_password(destination, path)?;
             Ok(ok())
         }
@@ -792,7 +815,7 @@ fn run(a: &Args) -> Result<serde_json::Value> {
             };
             setup_s3(
                 &store,
-                c.destination(destination)?,
+                load()?.destination(destination)?,
                 &access,
                 &key,
                 token.as_ref(),
@@ -802,12 +825,13 @@ fn run(a: &Args) -> Result<serde_json::Value> {
         Cmd::SmbPassword { destination, stdin } => {
             setup_smb(
                 &store,
-                c.destination(destination)?,
+                load()?.destination(destination)?,
                 &read_secret(*stdin, "SMB password: ")?,
             )?;
             Ok(ok())
         }
         Cmd::Approve { profile, revoke } => {
+            let mut c = load()?;
             let p = c
                 .profiles
                 .iter_mut()
@@ -818,6 +842,7 @@ fn run(a: &Args) -> Result<serde_json::Value> {
             Ok(ok())
         }
         Cmd::Destination { id, action } => {
+            let mut c = load()?;
             let d = c.destination(id)?.clone();
             match action {
                 DestCmd::Test => connection_test(&store, &d),
@@ -882,7 +907,7 @@ fn run(a: &Args) -> Result<serde_json::Value> {
             disable,
         } => {
             if *enable || *disable {
-                schedule(&store, c.profile(profile)?, *enable)?;
+                schedule(&store, load()?.profile(profile)?, *enable)?;
             }
             Ok(schedules())
         }
@@ -900,7 +925,7 @@ fn run(a: &Args) -> Result<serde_json::Value> {
             }
             direct(
                 &store,
-                &c,
+                &load()?,
                 profile,
                 None,
                 if *apply {

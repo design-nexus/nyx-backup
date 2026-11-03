@@ -150,9 +150,16 @@ fn adapt_stage(
 ) -> Result<Option<String>> {
     let path = stage_path(store, id, source)?;
     let relative = Path::new(source).strip_prefix(&mapping.source_config).ok();
+    // Staged links point outside the stage; writing through one would change a
+    // real file at planning time.
+    let regular = fs::symlink_metadata(&path)?.is_file();
     if relative.is_some_and(|p| {
         p == Path::new("hypr/monitors.lua") || p == Path::new("hypr/monitors.conf")
     }) {
+        ensure!(
+            regular,
+            "The monitor configuration in this snapshot is a link; restore it separately and review it"
+        );
         let data = if mapping.monitor_format == "lua" {
             r#"-- Prepared by Nyx Backup: use this machine's preferred display mode.
 hl.monitor({ output = "", mode = "preferred", position = "auto", scale = "auto" })
@@ -165,7 +172,7 @@ monitor = , preferred, auto, 1
         atomic(&path, data)?;
         return Ok(Some("Source display assignments replaced with target-format automatic monitor defaults; review before applying.".into()));
     }
-    if !mapping.rewrite_references {
+    if !mapping.rewrite_references || !regular {
         return Ok(None);
     }
     let metadata = fs::symlink_metadata(&path)?;
@@ -660,8 +667,8 @@ fn make_plan(
         paths,
         target,
         mode,
-        policy,
         include_secrets,
+        ..
     } = request
     else {
         anyhow::bail!("Expected a restore plan")
@@ -680,28 +687,7 @@ fn make_plan(
         "Choose a separate folder, not the filesystem root; full-system restoration is outside this phase"
     );
     protected(store, c, &root)?;
-    let selection = nodes(store, c, p, snapshot, paths, true, cancel)?;
-    let mut selected: Vec<_> = selection
-        .into_iter()
-        .filter(|n| related(Path::new(&n.path), paths))
-        .collect();
-    // Restic ls directory filters do not return a selected regular-file node on every backend.
-    if selected.is_empty() {
-        let all = nodes(store, c, p, snapshot, &["/".into()], true, cancel)?;
-        selected = all
-            .into_iter()
-            .filter(|n| related(Path::new(&n.path), paths))
-            .collect();
-    }
-    for source in paths {
-        ensure!(
-            selected
-                .iter()
-                .any(|n| n.path == *source || Path::new(&n.path).starts_with(source)),
-            "A selected path is absent from this snapshot: {source}"
-        );
-    }
-    ensure!(!selected.is_empty(), "No files selected");
+    let selected = selected_nodes(store, c, p, snapshot, paths, cancel)?;
     for node in &selected {
         ensure!(
             ["file", "dir", "symlink"].contains(&node.kind.as_str()),
@@ -712,6 +698,46 @@ fn make_plan(
     let id = id();
     let directory = plan_dir(store, &id)?;
     private_dir(&directory)?;
+    // Staging decrypts the selection; a plan that fails after that point has no
+    // receipt to find it by, so its copies are removed with it.
+    let staged = stage_plan(
+        store, c, p, request, &id, &directory, selected, cancel, job, changed,
+    );
+    if staged.is_err() {
+        let _ = fs::remove_dir_all(&directory);
+    }
+    staged
+}
+#[allow(clippy::too_many_arguments)]
+fn stage_plan(
+    store: &Store,
+    c: &Config,
+    p: &Profile,
+    request: &Request,
+    id: &str,
+    directory: &Path,
+    selected: Vec<Node>,
+    cancel: &AtomicBool,
+    job: &mut Job,
+    changed: &mut impl FnMut(&Job),
+) -> Result<Plan> {
+    let Request::Plan {
+        snapshot,
+        paths,
+        target,
+        mode,
+        policy,
+        include_secrets,
+    } = request
+    else {
+        anyhow::bail!("Expected a restore plan")
+    };
+    let root = match mode {
+        Mode::Separate => fs_safe::resolved(target.as_ref().context("Choose a target folder")?)?,
+        Mode::OriginalDotfiles => fs_safe::resolved(&nyx_core::paths::home())?,
+        Mode::MigratedUserData(mapping) => mapping.target_home.clone(),
+    };
+    let id = id.to_string();
     let stage = directory.join("stage");
     private_dir(&stage)?;
     let mut cmd = command(store, c, p)?;
@@ -763,13 +789,27 @@ fn make_plan(
             );
         }
         let mut target = mapped_target(store, c, mode, &plan.root, &node.path, *include_secrets)?;
-        let mut before = fs_safe::fingerprint(&target)?;
+        // A folder or special file where the file would go is never replaced.
+        let occupied = fs::symlink_metadata(&target)
+            .is_ok_and(|m| !m.is_file() && !m.file_type().is_symlink());
+        let mut before = if occupied {
+            None
+        } else {
+            fs_safe::fingerprint(&target)?
+        };
         let action = if before.as_ref() == Some(&after) {
             "unchanged"
-        } else if before.is_some() {
+        } else if before.is_some() || occupied {
             match policy {
                 Policy::Skip => "skip",
-                Policy::Replace => "replace",
+                Policy::Replace => {
+                    ensure!(
+                        !occupied,
+                        "A folder or special file is in the way of {}; choose Skip or Keep both",
+                        target.display()
+                    );
+                    "replace"
+                }
                 Policy::KeepBoth => {
                     let name = target
                         .file_name()
@@ -905,6 +945,9 @@ fn apply(
     // Validate all target fingerprints before changing any existing file.
     for entry in &plan.entries {
         check(cancel)?;
+        if entry.action == "skip" {
+            continue;
+        }
         ensure!(
             fs_safe::fingerprint(&entry.target)? == entry.before,
             "A target changed after preview: {}. Review a new restore plan.",
@@ -967,8 +1010,12 @@ fn rollback_check(entry: &Entry) -> Result<String> {
     {
         return Ok("nothing".into());
     }
-    let current = fs_safe::fingerprint(&entry.target)?;
     let previous = fs_safe::fingerprint(&entry.previous)?;
+    // Not yet installed and no original moved aside: the target is untouched.
+    if ["pending", "installing"].contains(&entry.status.as_str()) && previous.is_none() {
+        return Ok("nothing".into());
+    }
+    let current = fs_safe::fingerprint(&entry.target)?;
     if previous.is_none() && current == entry.before {
         return Ok("nothing".into());
     }
@@ -1180,14 +1227,17 @@ pub fn read(
             let directory = store.state.join("restore");
             let mut plans = Vec::new();
             if directory.exists() {
-                for entry in fs::read_dir(directory)? {
-                    let entry = entry?;
+                for entry in fs::read_dir(directory)?.flatten() {
                     if entry.path().join("plan.json").exists() {
                         let id = entry.file_name().to_string_lossy().into_owned();
-                        let plan: Plan =
-                            serde_json::from_slice(&fs::read(entry.path().join("plan.json"))?)?;
-                        if plan.profile == p.id {
-                            ensure!(plan.id == id, "Invalid restore receipt");
+                        // One damaged receipt must not hide the others.
+                        let Ok(plan) = fs::read(entry.path().join("plan.json"))
+                            .map_err(anyhow::Error::from)
+                            .and_then(|b| Ok(serde_json::from_slice::<Plan>(&b)?))
+                        else {
+                            continue;
+                        };
+                        if plan.profile == p.id && plan.id == id {
                             plans.push(serde_json::json!({"id":id,"created":plan.created,"snapshot":plan.snapshot,"state":plan.state,"target":plan.root}));
                         }
                     }
@@ -1360,6 +1410,38 @@ mod tests {
                 & 0o777,
             0o640
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn rollback_ignores_entries_that_were_never_installed() {
+        let (root, store, c, p, mut plan) = fixture("replace");
+        plan.state = "partial".into();
+        save(&store, &plan).unwrap();
+        // The user edits the target after an interrupted apply that never reached it.
+        fs::write(&plan.entries[0].target, "edited later\n").unwrap();
+        let cancel = AtomicBool::new(false);
+        let mut job = Job::new(&p.id, "restore-rollback");
+        let undone = rollback(&store, &c, &p, &plan.id, &cancel, &mut job, &mut |_| {}).unwrap();
+        assert_eq!(undone.state, "rolled_back");
+        assert_eq!(
+            fs::read_to_string(&plan.entries[0].target).unwrap(),
+            "edited later\n"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn skipped_entries_tolerate_a_folder_in_the_way() {
+        let (root, store, c, p, mut plan) = fixture("skip");
+        let target = plan.entries[0].target.clone();
+        fs::remove_file(&target).unwrap();
+        fs::create_dir(&target).unwrap();
+        plan.entries[0].before = None;
+        save(&store, &plan).unwrap();
+        let cancel = AtomicBool::new(false);
+        let mut job = Job::new(&p.id, "restore-apply");
+        let applied = apply(&store, &c, &p, &plan.id, &cancel, &mut job, &mut |_| {}).unwrap();
+        assert_eq!(applied.state, "applied");
+        assert!(target.is_dir());
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
@@ -1575,11 +1657,47 @@ pub fn snapshot_selection(
     cancel: &AtomicBool,
 ) -> Result<Vec<Node>> {
     owned_snapshot(store, c, p, snapshot, cancel)?;
-    let nodes = nodes(store, c, p, snapshot, paths, true, cancel)?;
-    Ok(nodes
+    selected_nodes(store, c, p, snapshot, paths, cancel)
+}
+/// The snapshot entries under the selected paths; every selected path must exist.
+fn selected_nodes(
+    store: &Store,
+    c: &Config,
+    p: &Profile,
+    snapshot: &str,
+    paths: &[String],
+    cancel: &AtomicBool,
+) -> Result<Vec<Node>> {
+    let selection = nodes(store, c, p, snapshot, paths, true, cancel)?;
+    let mut selected: Vec<_> = selection
         .into_iter()
         .filter(|n| related(Path::new(&n.path), paths))
-        .collect())
+        .collect();
+    // Restic ls directory filters do not return a selected regular-file node on every backend.
+    let missing = |selected: &[Node]| {
+        paths.iter().any(|source| {
+            !selected
+                .iter()
+                .any(|n| n.path == *source || Path::new(&n.path).starts_with(source))
+        })
+    };
+    if missing(&selected) {
+        let all = nodes(store, c, p, snapshot, &["/".into()], true, cancel)?;
+        selected = all
+            .into_iter()
+            .filter(|n| related(Path::new(&n.path), paths))
+            .collect();
+    }
+    for source in paths {
+        ensure!(
+            selected
+                .iter()
+                .any(|n| n.path == *source || Path::new(&n.path).starts_with(source)),
+            "A selected path is absent from this snapshot: {source}"
+        );
+    }
+    ensure!(!selected.is_empty(), "No files selected");
+    Ok(selected)
 }
 pub fn prepare_migration(
     _lock: &RepoLock,
