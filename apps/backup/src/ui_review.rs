@@ -129,7 +129,14 @@ pub fn run(ui: &Rc<Ui>) {
             let n = i / 2;
             let width = if n < 4 { 1600 } else { 800 };
             if i % 2 == 0 {
-                u.stack.set_visible_child_name(page[n % 4]);
+                if n % 4 == 3 {
+                    settings(&u);
+                } else {
+                    if settings_card::is_open() {
+                        settings_card::escape();
+                    }
+                    u.stack.set_visible_child_name(page[n % 4]);
+                }
                 u.window.set_default_size(width, 900);
                 if let Some(root) = u.window.child() {
                     root.allocate(width, 900, -1, None);
@@ -147,7 +154,9 @@ pub fn run(ui: &Rc<Ui>) {
             return glib::ControlFlow::Continue;
         }
         if i == 16 {
-            u.stack.set_visible_child_name("settings");
+            if !settings_card::is_open() {
+                settings(&u);
+            }
             let hit = click(u.window.upcast_ref(), "New destination");
             assert!(hit, "Destination button missing");
             step.set(17);
@@ -225,6 +234,9 @@ pub fn run(ui: &Rc<Ui>) {
                 gtk::gdk::ModifierType::empty()
             ));
             assert!(!d.is_visible(), "Escape did not dismiss ecosystem dialog");
+            if settings_card::is_open() {
+                settings_card::escape();
+            }
             u.stack.set_visible_child_name("restore");
             assert!(click(
                 u.window.upcast_ref(),

@@ -75,7 +75,7 @@ pub fn refresh(ui: &Rc<Ui>) {
             &p.name,
             "Snapshots are restricted to this Backup profile. Restore, diffs and rollback use a private local service channel.",
         );
-        let actions = w::hbox(6);
+        let actions = action_flow();
         let u = ui.clone();
         let profile = p.id.clone();
         actions.append(&action(

@@ -73,6 +73,8 @@ struct Ui {
     stack: gtk::Stack,
     profiles: gtk::Box,
     destinations: gtk::Box,
+    settings_root: gtk::ScrolledWindow,
+    settings_body: gtk::Box,
     restore: gtk::Box,
     health: gtk::Label,
     last: gtk::Label,
@@ -97,14 +99,15 @@ fn text(s: &str, class: &str) -> gtk::Label {
     l.set_wrap(true);
     l
 }
-fn page(title: &str, description: &str) -> (gtk::ScrolledWindow, gtk::Box) {
-    let body = w::vbox(18);
-    body.set_margin_top(24);
-    body.set_margin_bottom(24);
-    body.set_margin_start(28);
-    body.set_margin_end(28);
-    body.append(&text(title, "page-title"));
-    body.append(&text(description, "dim-label"));
+fn page(_title: &str, description: &str) -> (gtk::ScrolledWindow, gtk::Box) {
+    let body = w::vbox(12);
+    body.set_margin_top(16);
+    body.set_margin_bottom(16);
+    body.set_margin_start(16);
+    body.set_margin_end(16);
+    if !description.is_empty() {
+        body.append(&text(description, "dim-label"));
+    }
     let scroll = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .child(&body)
@@ -125,6 +128,15 @@ fn clear(b: &gtk::Box) {
     while let Some(c) = b.first_child() {
         b.remove(&c)
     }
+}
+fn action_flow() -> gtk::FlowBox {
+    let flow = gtk::FlowBox::new();
+    flow.set_selection_mode(gtk::SelectionMode::None);
+    flow.set_homogeneous(false);
+    flow.set_max_children_per_line(9);
+    flow.set_min_children_per_line(1);
+    flow.set_halign(gtk::Align::Start);
+    flow
 }
 fn action(icon: &str, tip: &str, run: impl Fn() + 'static) -> gtk::Button {
     let b = w::bar_button(icon, tip);
@@ -350,7 +362,7 @@ fn refresh(ui: &Rc<Ui>) {
                 }
             ),
         );
-        let buttons = w::hbox(4);
+        let buttons = action_flow();
         for (icon, tip, kind) in [
             ("document-edit-symbolic", "Edit profile", "edit"),
             (
@@ -413,7 +425,7 @@ fn refresh(ui: &Rc<Ui>) {
             },
         };
         let row = card(&d.name, status);
-        let buttons = w::hbox(4);
+        let buttons = action_flow();
         for (icon, tip, kind) in [
             ("document-edit-symbolic", "Edit destination", "edit"),
             (
@@ -1116,14 +1128,15 @@ fn settings(ui: &Rc<Ui>) {
         &ui.overlay,
         &ui.window,
         settings_card::Spec {
-            groups: &[],
+            groups: &[(
+                "Destinations and security",
+                "network-server-symbolic",
+                "Destinations, security and notifications",
+            )],
             search_text: None,
             standard: Some(standard()),
         },
-        || {
-            let (scroll, b) = page("Preferences", "");
-            (scroll.upcast(), b)
-        },
+        || (ui.settings_root.clone().upcast(), ui.settings_body.clone()),
     );
 }
 fn shortcuts(ui: &Rc<Ui>) {
@@ -1156,12 +1169,13 @@ fn build(app: &gtk::Application) {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("Nyx Backup")
-        .default_width(1040)
-        .default_height(740)
+        .default_width(1280)
+        .default_height(800)
         .build();
     window.add_css_class("backup-window");
     let overlay = gtk::Overlay::new();
     let outer = w::vbox(0);
+    outer.add_css_class("window-frame");
     overlay.set_child(Some(&outer));
     window.set_child(Some(&overlay));
     let header = chrome::app_header(&window, APP_ID, "Nyx Backup");
@@ -1170,7 +1184,7 @@ fn build(app: &gtk::Application) {
     main.set_vexpand(true);
     outer.append(&main);
     let sidebar = w::vbox(6);
-    sidebar.add_css_class("sidebar");
+    sidebar.add_css_class("settings-navigation");
     sidebar.set_width_request(212);
     sidebar.set_hexpand(false);
     main.append(&sidebar);
@@ -1229,7 +1243,11 @@ fn build(app: &gtk::Application) {
     let restore_content = w::vbox(12);
     b.append(&restore_content);
     stack.add_named(&restore, Some("restore"));
-    let (settings_page, b) = page("Settings", "Manage destinations and security.");
+    let (settings_page, settings_body) = page("Settings", "");
+    let b = w::vbox(12);
+    b.add_css_class("settings-group");
+    b.set_widget_name("Destinations and security");
+    settings_body.append(&b);
     let add_dest = w::labeled_button("list-add-symbolic", "New destination");
     b.append(&add_dest);
     let destinations = w::vbox(12);
@@ -1256,22 +1274,28 @@ fn build(app: &gtk::Application) {
         "preferences-system-symbolic",
         "Appearance, keyboard and About",
     );
-    b.append(&appearance);
-    stack.add_named(&settings_page, Some("settings"));
-    let status = w::hbox(10);
-    status.add_css_class("status-bar");
+    appearance.set_visible(false);
+
+    let status = w::hbox(6);
     let notice = text("Ready", "dim-label");
     notice.set_hexpand(true);
     notice.set_ellipsize(gtk::pango::EllipsizeMode::End);
     notice.set_wrap(false);
     status.append(&notice);
-    outer.append(&status);
+    let dismiss = action("window-close-symbolic", "Dismiss message", {
+        let notice = notice.clone();
+        move || notice.set_text("")
+    });
+    status.append(&dismiss);
+    body.append(&status);
     let ui = Rc::new(Ui {
         window: window.clone(),
         overlay,
         stack: stack.clone(),
         profiles,
         destinations,
+        settings_root: settings_page,
+        settings_body,
         restore: restore_content,
         health,
         last,
@@ -1290,7 +1314,6 @@ fn build(app: &gtk::Application) {
         ("overview", "Overview", "view-grid-symbolic"),
         ("backups", "Backups", "document-save-symbolic"),
         ("restore", "Restore", "edit-undo-symbolic"),
-        ("settings", "Settings", "preferences-system-symbolic"),
     ] {
         let button = gtk::Button::new();
         button.add_css_class("nav-item");
@@ -1307,12 +1330,23 @@ fn build(app: &gtk::Application) {
         button.connect_clicked(move |_| stack.set_visible_child_name(id));
     }
     let buttons = nav_buttons.clone();
+    let subtitle = header.subtitle.clone();
+    let title_window = window.clone();
     stack.connect_visible_child_name_notify(move |s| {
+        let title = match s.visible_child_name().as_deref() {
+            Some("backups") => "Backups",
+            Some("restore") => "Restore",
+            Some("settings") => "Settings",
+            _ => "Overview",
+        };
+        chrome::set_title(&title_window, "Nyx Backup", title);
+        subtitle.set_text(title);
+        subtitle.set_visible(true);
         let name = s.visible_child_name().unwrap_or_default();
         for (button, id) in buttons
             .borrow()
             .iter()
-            .zip(["overview", "backups", "restore", "settings"])
+            .zip(["overview", "backups", "restore"])
         {
             if name == id {
                 button.add_css_class("active")
@@ -1322,6 +1356,8 @@ fn build(app: &gtk::Application) {
         }
     });
     stack.set_visible_child_name("overview");
+    chrome::set_title(&window, "Nyx Backup", "Overview");
+    header.set_subtitle("Overview");
     nav_buttons.borrow()[0].add_css_class("active");
     let sidebar_width = sidebar.clone();
     let labels_width = nav_labels.clone();
@@ -1352,8 +1388,7 @@ fn build(app: &gtk::Application) {
     header
         .end
         .append(&chrome::settings_button(move || settings(&u)));
-    let u = ui.clone();
-    status.append(&chrome::shortcuts_button(move || shortcuts(&u)));
+
     let u = ui.clone();
     add_profile.connect_clicked(move |_| edit_profile(&u, None));
     let u = ui.clone();
@@ -1452,13 +1487,6 @@ fn build(app: &gtk::Application) {
         glib::Propagation::Stop
     });
     window.add_controller(keys);
-    nyx_ui::keys::install(
-        &window,
-        nyx_ui::keys::Common {
-            close: true,
-            ..Default::default()
-        },
-    );
     // Polling is lightweight; all bus calls and repository work run off the GTK thread.
     let poll = Rc::new(Cell::new(false));
     let weak = Rc::downgrade(&ui);
