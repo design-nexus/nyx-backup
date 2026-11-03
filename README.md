@@ -1,6 +1,6 @@
 # Nyx Backup
 
-A Rust/GTK4 desktop app for encrypted Restic backups of **selected user data and readable system metadata**. Standard Restic tools can read its repositories. The app is unprivileged and makes no complete-system, boot-recovery or cross-PC recovery claim. Phase 2 adds staged selective restoration, dotfile diffs, conflict handling and rollback. Phase 3 adds package inventories, reviewed user/hardware migration planning and a versioned Setup consumer. Phase 4 adds a separate offline whole-disk recovery helper and bootable recovery kit, qualified against a disposable UEFI VM.
+A Rust/GTK4 desktop app for encrypted Restic backups of **selected user data and readable system metadata**. Standard Restic tools can read its repositories. The desktop app is unprivileged; broad complete-system, physical-machine and cross-PC recovery remain unqualified. Phase 2 adds staged selective restoration, dotfile diffs, conflict handling and rollback. Phase 3 adds package inventories, reviewed user/hardware migration planning and a versioned Setup consumer. Phase 4 adds a separate offline whole-disk recovery helper and bootable recovery kit, qualified against a disposable UEFI VM. Version 0.6.0 adds S3-compatible cloud destinations, explicit private-GitHub Backup settings sync and granted Control Center integration, with local security/failure/performance qualification.
 
 The interface has Overview, Backups, Restore and Settings. Backup and repository-administration jobs belong to an on-demand systemd user service, so closing the window does not stop them. Scheduling and retention deletion require explicit action.
 
@@ -19,7 +19,7 @@ Headless libraries and CLI/service build with `cargo build --locked` (the defaul
 
 ```sh
 cargo fmt --all --check
-cargo test --locked -p backup-engine -p backup-restore -p backup-migrate
+cargo test --locked -p backup-engine -p backup-restore -p backup-migrate -p backup-service -p backup-system -p backup-recovery
 # Disposable private-bus/keyring integration test; never selects real user data:
 python3 tools/smoke.py
 # Private-bus activation and a disposable transient user timer:
@@ -95,3 +95,6 @@ The app restores contents, symlinks, modes and modification times; ownership, AC
 For reviewed migration and Setup handoff, see [Phase 3 workflow](docs/MIGRATION.md). For explicitly captured offline disk images and boot kits, see [Phase 4 recovery](docs/RECOVERY.md). Selected-data snapshots cannot become whole-disk images retroactively.
 
 See [architecture/API](docs/ARCHITECTURE.md), [security](docs/SECURITY.md), [capabilities and roadmap](docs/ROADMAP.md), and [Restic recovery documentation](https://restic.readthedocs.io/en/stable/050_restore.html).
+
+
+Cloud, GitHub settings sync and expiring integration grants are described in [the ecosystem workflow](docs/ECOSYSTEM.md). The independent Control Center includes a selectable Backup tile; no panel layout is changed automatically. See [security review](docs/SECURITY-REVIEW.md) for dependency maintenance advisories and the exact qualification limits. S3 protocol is tested on loopback; real commercial cloud/GitHub accounts and GUI interactions remain unverified.

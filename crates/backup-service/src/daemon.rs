@@ -1,3 +1,4 @@
+use anyhow::Context;
 use backup_core::*;
 use backup_service::capabilities;
 use std::sync::{
@@ -182,12 +183,8 @@ impl Api {
         #[zbus(header)] h: Header<'_>,
     ) -> zbus::fdo::Result<String> {
         authorize(c, &h).await?;
-        if !["backup", "verify", "verify-full", "history", "stats"].contains(&operation) {
-            return Err(zbus::fdo::Error::AccessDenied(
-                "Operation is not exposed by this API".into(),
-            ));
-        }
-        self.launch(id, operation, c, true, None, None)
+        let _ = (id, operation);
+        Err(zbus::fdo::Error::AccessDenied("Use the granted Core Control interface; explicit local clients use the private channel".into()))
     }
     async fn cancel(
         &self,
@@ -196,15 +193,10 @@ impl Api {
         #[zbus(header)] h: Header<'_>,
     ) -> zbus::fdo::Result<String> {
         authorize(c, &h).await?;
-        let active = self.active.lock().map_err(failure)?;
-        let Some((active_id, cancel)) = active.as_ref() else {
-            return Err(failure("No active job"));
-        };
-        if active_id != id {
-            return Err(failure("This job is not active"));
-        }
-        cancel.store(true, Ordering::SeqCst);
-        Ok("Cancellation requested".into())
+        let _ = id;
+        Err(zbus::fdo::Error::AccessDenied(
+            "Use granted backup.cancel or the explicit private local client".into(),
+        ))
     }
     #[zbus(signal)]
     async fn job_changed(emitter: &SignalEmitter<'_>, job: &str) -> zbus::Result<()>;
@@ -235,6 +227,23 @@ async fn handle_admin(
             request.configuration == backup_service::configuration_file(&api.store),
             "Client and service use different configurations; refusing repository administration"
         );
+        if request.operation == "cancel" {
+            let job = request.job.as_ref().context("Missing job")?;
+            anyhow::ensure!(
+                api.store.job(job)?.profile == request.profile,
+                "Job belongs to another profile"
+            );
+            let active = api
+                .active
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Worker unavailable"))?;
+            let Some((id, cancel)) = active.as_ref() else {
+                anyhow::bail!("No active job")
+            };
+            anyhow::ensure!(id == job, "Job is not active");
+            cancel.store(true, Ordering::SeqCst);
+            return Ok(serde_json::json!({"version":1,"cancel_requested":job}));
+        }
         if let Some(migration) = &request.migration {
             if !migration.is_job() {
                 let store = api.store.clone();
@@ -269,7 +278,8 @@ async fn handle_admin(
             &request.profile,
             &request.operation,
             c,
-            false,
+            ["backup", "verify", "verify-full", "history", "stats"]
+                .contains(&request.operation.as_str()),
             request.restore,
             request.migration,
         )?;
@@ -295,6 +305,155 @@ async fn handle_admin(
     .await??;
     Ok(())
 }
+#[derive(Clone)]
+struct Control {
+    api: Api,
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ControlArgs {
+    grant: String,
+    #[serde(default)]
+    job: Option<String>,
+}
+#[zbus::interface(name = "io.github.design_nexus.nyx.Control")]
+impl Control {
+    async fn describe(
+        &self,
+        #[zbus(connection)] c: &Connection,
+        #[zbus(header)] h: Header<'_>,
+    ) -> zbus::fdo::Result<String> {
+        authorize(c, &h).await?;
+        let owner = h
+            .sender()
+            .ok_or_else(|| failure("Missing sender"))?
+            .as_str();
+        let config = self.api.store.load().map_err(failure)?;
+        let mut grants: Vec<_> = backup_service::integration::list(&self.api.store)
+            .map_err(failure)?
+            .into_iter()
+            .filter(|g| {
+                g.owner == owner
+                    && g.expires > now()
+                    && config.profile(&g.profile).is_ok_and(|p| p.approved)
+            })
+            .collect();
+        grants.sort_by_key(|g| std::cmp::Reverse(g.expires));
+        let mut tools = Vec::new();
+        for (name, action, description) in [
+            (
+                "backup.status",
+                "status",
+                "Granted profile health and progress",
+            ),
+            (
+                "backup.start",
+                "backup",
+                "Start the granted approved profile",
+            ),
+            ("backup.verify", "verify", "Verify the granted profile"),
+            (
+                "backup.cancel",
+                "cancel",
+                "Cancel the granted profile's active job",
+            ),
+        ] {
+            let ids: Vec<_> = grants
+                .iter()
+                .filter(|g| g.actions.iter().any(|a| a == action))
+                .map(|g| g.id.clone())
+                .collect();
+            if ids.is_empty() {
+                continue;
+            }
+            let mut schema = serde_json::json!({"type":"object","additionalProperties":false,"properties":{"grant":{"type":"string","enum":ids}},"required":["grant"]});
+            if action == "cancel" {
+                schema["properties"]["job"] = serde_json::json!({"type":"string"});
+                schema["required"] = serde_json::json!(["grant", "job"]);
+            }
+            tools.push(
+                serde_json::json!({"name":name,"description":description,"inputSchema":schema}),
+            );
+        }
+        Ok(serde_json::to_string(&tools).map_err(failure)?)
+    }
+    async fn call(
+        &self,
+        name: &str,
+        arguments: &str,
+        #[zbus(connection)] c: &Connection,
+        #[zbus(header)] h: Header<'_>,
+    ) -> zbus::fdo::Result<String> {
+        authorize(c, &h).await?;
+        let result = async {
+            anyhow::ensure!(arguments.len() <= 4096, "Control request is too large");
+            let a: ControlArgs = serde_json::from_str(arguments)?;
+            let owner = h
+                .sender()
+                .ok_or_else(|| anyhow::anyhow!("Missing sender"))?
+                .as_str();
+            let action = match name {
+                "backup.status" => "status",
+                "backup.start" => "backup",
+                "backup.verify" => "verify",
+                "backup.cancel" => "cancel",
+                _ => anyhow::bail!("Unsupported control action"),
+            };
+            let g = backup_service::integration::check(&self.api.store, &a.grant, owner, action)?;
+            let bus = zbus::Proxy::new(
+                c,
+                "org.freedesktop.DBus",
+                "/org/freedesktop/DBus",
+                "org.freedesktop.DBus",
+            )
+            .await?;
+            let current: String = bus.call("GetNameOwner", &(&g.consumer,)).await?;
+            anyhow::ensure!(
+                current == owner,
+                "Consumer bus-name ownership changed; grant a new connection"
+            );
+            match action {
+                "status" => {
+                    anyhow::ensure!(a.job.is_none(), "Status does not accept a job");
+                    backup_service::integration::summary(&self.api.store, &g)
+                }
+                "cancel" => {
+                    let id = a.job.context("Choose a job to cancel")?;
+                    anyhow::ensure!(
+                        self.api.store.job(&id)?.profile == g.profile,
+                        "Job belongs to another profile"
+                    );
+                    let active = self
+                        .api
+                        .active
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("Worker state unavailable"))?;
+                    let Some((job, cancel)) = active.as_ref() else {
+                        anyhow::bail!("No active job")
+                    };
+                    anyhow::ensure!(job == &id, "Job is not active");
+                    cancel.store(true, Ordering::SeqCst);
+                    Ok(serde_json::json!({"cancel_requested":id}))
+                }
+                operation => {
+                    anyhow::ensure!(a.job.is_none(), "Start does not accept a job");
+                    let id = self
+                        .api
+                        .launch(&g.profile, operation, c, true, None, None)
+                        .map_err(|e| anyhow::anyhow!("{e}"))?;
+                    Ok(serde_json::json!({"job":id}))
+                }
+            }
+        }
+        .await;
+        Ok(match result {
+            Ok(v) => serde_json::json!({"ok":v}),
+            Err(e) => serde_json::json!({"error":e.to_string()}),
+        }
+        .to_string())
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     backup_core::init();
@@ -305,6 +464,7 @@ async fn main() -> anyhow::Result<()> {
     let connection = zbus::connection::Builder::session()?
         .name(BUS)?
         .serve_at(OBJECT, api.clone())?
+        .serve_at(OBJECT, Control { api: api.clone() })?
         .build()
         .await?;
     let socket = backup_service::admin_socket(&api.store);

@@ -19,6 +19,8 @@ zbus = { version = "5", default-features = false, features = ["tokio", "blocking
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal", "net", "io-util"] }
 clap = { version = "4", features = ["derive"] }
 rpassword = "7"
+base64 = "0.22"
+sha2 = "0.10"
 
 [[bin]]
 name = "nyx-backupd"

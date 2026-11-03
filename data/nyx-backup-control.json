@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "application": "io.github.design_nexus.nyx.Backup",
+  "bus": "io.github.design_nexus.nyx.Backup1",
+  "object": "/io/github/design_nexus/nyx/Backup1",
+  "interface": "io.github.design_nexus.nyx.Control",
+  "methods": [
+    "Describe",
+    "Call"
+  ],
+  "authorization": "same UID, expiring sender-bound grant, current bus-name ownership and approved profile",
+  "actions": [
+    "backup.status",
+    "backup.start",
+    "backup.verify",
+    "backup.cancel"
+  ],
+  "destructive_recovery": false,
+  "credentials": false,
+  "describe_format": "tool array with name, description and inputSchema; sender-bound grant enums"
+}

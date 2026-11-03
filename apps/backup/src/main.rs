@@ -1,3 +1,4 @@
+mod ecosystem_ui;
 mod migration_ui;
 mod recovery_ui;
 mod restore_ui;
@@ -396,7 +397,9 @@ fn refresh(ui: &Rc<Ui>) {
     }
     for d in c.destinations {
         let status = match &d.kind {
-            DestinationKind::Sftp { .. } | DestinationKind::Smb { .. } => {
+            DestinationKind::Sftp { .. }
+            | DestinationKind::Smb { .. }
+            | DestinationKind::S3 { .. } => {
                 "Connection not tested. Test connectivity and validate the repository separately."
             }
             DestinationKind::Local { .. } => {
@@ -444,6 +447,15 @@ fn refresh(ui: &Rc<Ui>) {
     "password"=>credential_dialog(&u,d.clone(),false),"export"=>export_dialog(&u,d.id.clone()),
     _=>{let c=Store::default().load().unwrap_or_default();if let Some(p)=c.profiles.iter().find(|p|p.destination==d.id){if kind=="init"{confirm_init(&u,p.id.clone());}else{local_operation(&u,p.id.clone(),"validate");}}else{message(&u,"Profile needed","Create a profile using this destination first.");}},
    }));
+        }
+        if matches!(d.kind, DestinationKind::S3 { .. }) {
+            let u = ui.clone();
+            let dest = d.clone();
+            row.append(&action(
+                "dialog-password-symbolic",
+                "Set encrypted cloud credentials",
+                move || ecosystem_ui::cloud_credentials(&u, dest.clone()),
+            ));
         }
         if matches!(d.kind, DestinationKind::Smb { .. }) {
             let u = ui.clone();
@@ -823,6 +835,7 @@ fn edit_destination(ui: &Rc<Ui>, destination: Option<Destination>) {
         "Preconfigured user-mountable NFS",
         "SFTP via SSH config/agent",
         "SMB via encrypted Rclone config",
+        "S3-compatible cloud via encrypted Rclone config",
     ]);
     b.append(&kind);
     let index = destination
@@ -833,6 +846,7 @@ fn edit_destination(ui: &Rc<Ui>, destination: Option<Destination>) {
             DestinationKind::Nfs { .. } => 2,
             DestinationKind::Sftp { .. } => 3,
             DestinationKind::Smb { .. } => 4,
+            DestinationKind::S3 { .. } => 5,
         })
         .unwrap_or(0);
     kind.set_selected(index);
@@ -843,7 +857,7 @@ fn edit_destination(ui: &Rc<Ui>, destination: Option<Destination>) {
     let val = |key: &str| old[key].as_str().unwrap_or("");
     let path = entry(
         &b,
-        "Repository path (absolute for local/SFTP; within share for SMB)",
+        "Repository path (absolute local/SFTP; relative SMB/S3 prefix)",
         val("path"),
     );
     let browse = action("folder-open-symbolic", "Choose repository folder", {
@@ -870,6 +884,17 @@ fn edit_destination(ui: &Rc<Ui>, destination: Option<Destination>) {
             val("host")
         },
     );
+    let endpoint = entry(&b, "S3 HTTPS endpoint (blank for AWS)", val("endpoint"));
+    let region = entry(
+        &b,
+        "S3 region",
+        if val("region").is_empty() {
+            "us-east-1"
+        } else {
+            val("region")
+        },
+    );
+    let bucket = entry(&b, "S3 bucket", val("bucket"));
     let share = entry(&b, "SMB share", val("share"));
     let user = entry(&b, "SMB username", val("username"));
     let domain = entry(&b, "SMB domain (optional)", val("domain"));
@@ -893,6 +918,9 @@ fn edit_destination(ui: &Rc<Ui>, destination: Option<Destination>) {
     b.append(&error);
     // Keep irrelevant fields visible but disabled so their purpose stays clear.
     let update = {
+        let endpoint = endpoint.clone();
+        let region = region.clone();
+        let bucket = bucket.clone();
         let host = host.clone();
         let share = share.clone();
         let user = user.clone();
@@ -901,7 +929,10 @@ fn edit_destination(ui: &Rc<Ui>, destination: Option<Destination>) {
         let source = source.clone();
         let filesystem = filesystem.clone();
         move |i| {
-            host.set_sensitive(i >= 3);
+            host.set_sensitive(i == 3 || i == 4);
+            for e in [&endpoint, &region, &bucket] {
+                e.set_sensitive(i == 5);
+            }
             for e in [&share, &user, &domain] {
                 e.set_sensitive(i == 4);
             }
@@ -916,7 +947,7 @@ fn edit_destination(ui: &Rc<Ui>, destination: Option<Destination>) {
     d.connect_response(move|d,r|{if r!=gtk::ResponseType::Accept{d.close();return}let result=(||->anyhow::Result<()>{let pathbuf=PathBuf::from(path.text().as_str());let k=match kind.selected(){
   0=>DestinationKind::Local{path:pathbuf},1=>{let mut ancestor=pathbuf.as_path();while !ancestor.exists(){ancestor=ancestor.parent().ok_or_else(||anyhow::anyhow!("Choose an existing mounted destination"))?;}let m=backup_system::mount_identity(ancestor)?;anyhow::ensure!(m["target"]!="/","This is on the root filesystem. Choose a mounted device or use Local folder.");DestinationKind::Mounted{path:pathbuf,mount_point:PathBuf::from(m["target"].as_str().unwrap_or("")),source:m["source"].as_str().unwrap_or("").into(),filesystem:m["fstype"].as_str().unwrap_or("").into(),uuid:m["uuid"].as_str().unwrap_or("").into()}},
   2=>DestinationKind::Nfs{path:pathbuf,mount_point:PathBuf::from(mount.text().as_str()),source:source.text().to_string(),filesystem:filesystem.text().to_string()},
-  3=>DestinationKind::Sftp{host:host.text().to_string(),path:path.text().to_string()},_=>DestinationKind::Smb{server:host.text().to_string(),share:share.text().to_string(),path:path.text().to_string(),username:user.text().to_string(),domain:domain.text().to_string()},};let dest=Destination{id:id.text().to_string(),name:name.text().to_string(),kind:k};let mut c=Store::default().load()?;if destination.is_none(){anyhow::ensure!(!c.destinations.iter().any(|x|x.id==dest.id),"Destination ID already exists");}c.destinations.retain(|x|x.id!=dest.id);c.destinations.push(dest);Store::default().save(&c)})();match result{Ok(_)=>{d.close();refresh(&ui)},Err(e)=>error.set_text(&e.to_string())}});
+  3=>DestinationKind::Sftp{host:host.text().to_string(),path:path.text().to_string()},5=>DestinationKind::S3{endpoint:endpoint.text().to_string(),region:region.text().to_string(),bucket:bucket.text().to_string(),path:path.text().to_string()},_=>DestinationKind::Smb{server:host.text().to_string(),share:share.text().to_string(),path:path.text().to_string(),username:user.text().to_string(),domain:domain.text().to_string()},};let dest=Destination{id:id.text().to_string(),name:name.text().to_string(),kind:k};let mut c=Store::default().load()?;if destination.is_none(){anyhow::ensure!(!c.destinations.iter().any(|x|x.id==dest.id),"Destination ID already exists");}c.destinations.retain(|x|x.id!=dest.id);c.destinations.push(dest);Store::default().save(&c)})();match result{Ok(_)=>{d.close();refresh(&ui)},Err(e)=>error.set_text(&e.to_string())}});
     d.present();
 }
 fn credential_dialog(ui: &Rc<Ui>, dest: Destination, smb: bool) {
@@ -1184,6 +1215,11 @@ fn build(app: &gtk::Application) {
             let _ = Store::default().save(&c);
         }
     });
+    let ecosystem = w::labeled_button(
+        "network-server-symbolic",
+        "Cloud, GitHub sync and integration grants",
+    );
+    b.append(&ecosystem);
     let appearance = w::labeled_button(
         "preferences-system-symbolic",
         "Appearance, keyboard and About",
@@ -1289,6 +1325,8 @@ fn build(app: &gtk::Application) {
     let u = ui.clone();
     add_profile.connect_clicked(move |_| edit_profile(&u, None));
     let u = ui.clone();
+    ecosystem.connect_clicked(move |_| ecosystem_ui::show(&u));
+    let u = ui.clone();
     add_dest.connect_clicked(move |_| edit_destination(&u, None));
     let u = ui.clone();
     appearance.connect_clicked(move |_| settings(&u));
@@ -1319,7 +1357,7 @@ fn build(app: &gtk::Application) {
                 work(
                     &u,
                     "Requesting cancellation…",
-                    move || Ok(backup_service::client_call("Cancel", (id.as_str(),))?),
+                    move || Ok(backup_service::cancel(&id)?),
                     |ui, s| ui.notice.set_text(&s),
                 );
             }

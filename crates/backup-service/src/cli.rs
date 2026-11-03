@@ -17,6 +17,21 @@ struct Args {
 #[derive(Subcommand)]
 enum Cmd {
     Capabilities,
+    Github {
+        #[command(subcommand)]
+        action: GithubCmd,
+    },
+    Integrations {
+        #[command(subcommand)]
+        action: IntegrationCmd,
+    },
+    S3Credentials {
+        destination: String,
+        #[arg(long)]
+        stdin: bool,
+        #[arg(long)]
+        session_token: bool,
+    },
     Migration {
         #[command(subcommand)]
         action: MigrationCmd,
@@ -105,6 +120,46 @@ enum Cmd {
         apply: bool,
         #[arg(long, requires = "apply")]
         confirm_profile: Option<String>,
+    },
+}
+#[derive(Subcommand)]
+enum GithubCmd {
+    Plan {
+        repository: String,
+        #[arg(long, default_value = "main")]
+        branch: String,
+        #[arg(long = "profile", required = true)]
+        profiles: Vec<String>,
+    },
+    Inspect {
+        id: String,
+    },
+    Push {
+        id: String,
+        #[arg(long)]
+        confirm: String,
+    },
+    Fetch {
+        repository: String,
+        #[arg(long, default_value = "main")]
+        branch: String,
+        #[arg(long)]
+        output: PathBuf,
+    },
+}
+#[derive(Subcommand)]
+enum IntegrationCmd {
+    List,
+    Grant {
+        consumer: String,
+        profile: String,
+        #[arg(long, value_delimiter = ',', default_value = "status")]
+        actions: Vec<String>,
+        #[arg(long, default_value_t = 3600)]
+        seconds: u64,
+    },
+    Revoke {
+        id: String,
     },
 }
 #[derive(Subcommand)]
@@ -668,9 +723,7 @@ fn run(a: &Args) -> Result<serde_json::Value> {
         Cmd::History { profile } => start(profile, "history", true),
         Cmd::Stats { profile } => start(profile, "stats", true),
         Cmd::Job { id } => parse(backup_service::client_call("Job", (id.as_str(),))?),
-        Cmd::Cancel { id } => {
-            Ok(serde_json::json!({"message":backup_service::client_call("Cancel",(id.as_str(),))?}))
-        }
+        Cmd::Cancel { id } => Ok(serde_json::json!({"message":backup_service::cancel(id)?})),
         Cmd::Password {
             destination,
             generate,
@@ -688,6 +741,62 @@ fn run(a: &Args) -> Result<serde_json::Value> {
         Cmd::ExportPassword { destination, path } => {
             c.destination(destination)?;
             export_password(destination, path)?;
+            Ok(ok())
+        }
+        Cmd::Github { action } => {
+            use backup_service::github_sync::*;
+            match action {
+                GithubCmd::Plan {
+                    repository,
+                    branch,
+                    profiles,
+                } => prepare(&store, repository, branch, profiles),
+                GithubCmd::Inspect { id } => inspect(&store, id),
+                GithubCmd::Push { id, confirm } => push(&store, id, confirm),
+                GithubCmd::Fetch {
+                    repository,
+                    branch,
+                    output,
+                } => fetch(repository, branch, output),
+            }
+        }
+        Cmd::Integrations { action } => {
+            use backup_service::integration::*;
+            match action {
+                IntegrationCmd::List => Ok(serde_json::to_value(list(&store)?)?),
+                IntegrationCmd::Grant {
+                    consumer,
+                    profile,
+                    actions,
+                    seconds,
+                } => Ok(serde_json::to_value(issue(
+                    &store, consumer, profile, actions, *seconds,
+                )?)?),
+                IntegrationCmd::Revoke { id } => {
+                    revoke(&store, id)?;
+                    Ok(ok())
+                }
+            }
+        }
+        Cmd::S3Credentials {
+            destination,
+            stdin,
+            session_token,
+        } => {
+            let access = read_secret(*stdin, "S3 access key ID: ")?;
+            let key = read_secret(*stdin, "S3 secret access key: ")?;
+            let token = if *session_token {
+                Some(read_secret(*stdin, "S3 session token: ")?)
+            } else {
+                None
+            };
+            setup_s3(
+                &store,
+                c.destination(destination)?,
+                &access,
+                &key,
+                token.as_ref(),
+            )?;
             Ok(ok())
         }
         Cmd::SmbPassword { destination, stdin } => {

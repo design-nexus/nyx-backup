@@ -157,6 +157,16 @@ pub fn setup_smb(store: &Store, d: &Destination, secret: &Secret) -> Result<()> 
         "[nas]\ntype = smb\nhost = {server}\nuser = {username}\ndomain = {domain}\npass = {}\n",
         obscured.trim()
     );
+    store_secret("nyx-backup", &d.id, "smb", secret)?;
+    encrypt_rclone(store, d, &unlock, &smb_binding(d)?, &plain)
+}
+pub fn encrypt_rclone(
+    store: &Store,
+    d: &Destination,
+    unlock: &Secret,
+    binding: &str,
+    plain: &str,
+) -> Result<()> {
     // Rclone ENCRYPT_V0 format: SHA256([password][rclone-config]), XSalsa20-Poly1305.
     // Our generated unlock key is ASCII, so Rclone's NFKC normalization is identical.
     use base64::Engine;
@@ -175,20 +185,19 @@ pub fn setup_smb(store: &Store, d: &Destination, secret: &Secret) -> Result<()> 
         .map_err(|_| anyhow::anyhow!("Could not encrypt Rclone configuration"))?;
     let mut data = nonce.to_vec();
     data.extend(encrypted);
-    store_secret("nyx-backup", &d.id, "smb", secret)?;
     atomic(
         &rclone_config(store, &d.id),
         format!(
-            "{}\nRCLONE_ENCRYPT_V0:\n{}\n",
-            smb_binding(d)?,
+            "{binding}\nRCLONE_ENCRYPT_V0:\n{}\n",
             base64::engine::general_purpose::STANDARD.encode(data)
         ),
     )?;
     Ok(())
 }
+
 pub fn rclone(store: &Store, d: &Destination) -> Result<Command> {
     valid_id(&d.id)?;
-    validate_smb_config(store, d)?;
+    validate_rclone_config(store, d)?;
     ensure_secret_unlocked(&d.id, "rclone")?;
     let mut c = clean_command("rclone");
     c.args(["--config"]).arg(rclone_config(store, &d.id)).args([
@@ -199,12 +208,18 @@ pub fn rclone(store: &Store, d: &Destination) -> Result<Command> {
         "15s",
         "--timeout",
         "30s",
+        "--retries",
+        "1",
+        "--low-level-retries",
+        "1",
     ]);
     Ok(c)
 }
 pub fn smb_path(d: &Destination) -> Result<String> {
     if let DestinationKind::Smb { share, path, .. } = &d.kind {
         Ok(format!("nas:{}/{}", share, path.trim_matches('/')))
+    } else if let DestinationKind::S3 { bucket, path, .. } = &d.kind {
+        Ok(format!("cloud:{}/{}", bucket, path.trim_matches('/')))
     } else {
         anyhow::bail!("Not an SMB destination")
     }
@@ -294,10 +309,17 @@ pub fn validate_destination(d: &Destination) -> Result<()> {
 pub fn connection_test(store: &Store, d: &Destination) -> Result<serde_json::Value> {
     validate_destination(d)?;
     match &d.kind {
+        DestinationKind::S3 { bucket, .. } => {
+            let mut c = rclone(store, d)?;
+            c.arg("lsf")
+                .arg(format!("cloud:{bucket}"))
+                .args(["--max-depth", "1"]);
+            checked(c, "S3 bucket connection")?;
+        }
         DestinationKind::Smb { .. } => {
             let mut c = rclone(store, d)?;
             c.arg("lsf").arg(smb_path(d)?).args(["--max-depth", "1"]);
-            checked(c, "SMB connection")?;
+            checked(c, "Cloud/NAS connection")?;
         }
         DestinationKind::Sftp { host, .. } => {
             // Probe the same subsystem used by Restic. SFTP-only accounts may
@@ -503,3 +525,6 @@ pub fn notify(success: bool) {
 }
 
 pub mod migration_inventory;
+
+pub mod cloud;
+pub use cloud::{setup_s3, validate_rclone_config};

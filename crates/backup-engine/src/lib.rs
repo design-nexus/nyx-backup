@@ -298,7 +298,9 @@ fn repo_args(store: &Store, d: &Destination) -> Result<Vec<String>> {
         | DestinationKind::Mounted { path, .. }
         | DestinationKind::Nfs { path, .. } => path.to_string_lossy().into_owned(),
         DestinationKind::Sftp { host, path } => format!("sftp:{host}:{path}"),
-        DestinationKind::Smb { .. } => format!("rclone:{}", smb_path(d)?),
+        DestinationKind::Smb { .. } | DestinationKind::S3 { .. } => {
+            format!("rclone:{}", smb_path(d)?)
+        }
     };
     let mut a = vec![
         "--repo".into(),
@@ -309,8 +311,11 @@ fn repo_args(store: &Store, d: &Destination) -> Result<Vec<String>> {
         "--cache-dir".into(),
         store.cache.join("restic").to_string_lossy().into_owned(),
     ];
-    if matches!(d.kind, DestinationKind::Smb { .. }) {
-        validate_smb_config(store, d)?;
+    if matches!(
+        d.kind,
+        DestinationKind::Smb { .. } | DestinationKind::S3 { .. }
+    ) {
+        validate_rclone_config(store, d)?;
         ensure_secret_unlocked(&d.id, "rclone")?;
         let q = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
         let command = format!(

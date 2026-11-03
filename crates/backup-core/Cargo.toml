@@ -10,3 +10,4 @@ serde_json.workspace = true
 toml.workspace = true
 uuid.workspace = true
 nyx-core.workspace = true
+url = "2"

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Destructive qualification entirely in QEMU guests, using disposable regular disk files."""
-import hashlib,importlib.util,json,os,pathlib,shutil,subprocess,tempfile,time
+import hashlib,importlib.util,json,os,pathlib,shutil,subprocess,tempfile,time,sys
+extended="--extended" in sys.argv
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('builder',ROOT/'tools/build-recovery.py');builder=importlib.util.module_from_spec(spec);spec.loader.exec_module(builder)
 work=pathlib.Path(tempfile.mkdtemp(prefix='nyx-recovery-vm-',dir=ROOT/'target'));work.chmod(0o700)
@@ -85,8 +86,15 @@ umount /repository
 trap - EXIT
 poweroff -f
 ''');script.chmod(0o700)
+if extended:
+ text=script.read_text()
+ marker='# Wrong password and ordinary snapshots cannot touch targets or initialize replacements.'
+ text=text.replace(marker,"if printf 'fixture-recovery-password\\n' | nyx-backup-recovery --password-stdin --json plan --repo /repository/restic --snapshot \"$SNAP\" --device /dev/vdd --work /repository/mismatched; then exit 1; fi\n"+marker)
+ needle='nyx-backup-recovery --json apply --plan /repository/plan/plan.json --confirm "$TOKEN" > /repository/applied.json'
+ text=text.replace(needle,(ROOT/'tools/recovery-interruption.sh').read_text())
+ script.write_text(text)
 kit=builder.build(work/'recovery-kit','7.2.11-arch1-1',script,{'fixture/boot.efi':bootkit/'nyx-recovery.efi','fixture/root-init':root_init},fixture=True,console='ttyS0')
-for name,size in [('source.raw',384),('repository.raw',1536),('target.raw',384)]:
+for name,size in [('source.raw',384),('repository.raw',1536),('target.raw',384)]+([('geometry.raw',64)] if extended else []):
  with (work/name).open('wb') as f:f.truncate(size*1024*1024)
 def qemu(args,log,marker):
  command=['qemu-system-x86_64','-machine','q35','-accel','kvm','-cpu','host','-m','2048','-nographic','-monitor','none','-nic','none','-no-reboot']+args
@@ -95,9 +103,10 @@ def qemu(args,log,marker):
   try:code=p.wait(timeout=240)
   except subprocess.TimeoutExpired:p.kill();p.wait();raise AssertionError(f'VM timeout; inspect {log}')
  text=log.read_text(errors='replace');assert code==0 and marker in text,(code,str(log),text[-5000:])
-qemu(['-kernel',kit/'vmlinuz','-initrd',kit/'initramfs.cpio.gz','-append','console=ttyS0 nyx.recovery=1 panic=-1']+sum((['-drive',f'file={work/name},format=raw,if=virtio'] for name in ['source.raw','repository.raw','target.raw']),[]),work/'recovery.log','NYX_RECOVERY_DISK_MATCH_OK')
+qemu(['-kernel',kit/'vmlinuz','-initrd',kit/'initramfs.cpio.gz','-append','console=ttyS0 nyx.recovery=1 panic=-1']+sum((['-drive',f'file={work/name},format=raw,if=virtio'+(',throttling.bps-write=16777216' if extended and name=='target.raw' else '')] for name in ['source.raw','repository.raw','target.raw']+(['geometry.raw'] if extended else [])),[]),work/'recovery.log','NYX_RECOVERY_DISK_MATCH_OK')
+if extended:assert 'NYX_INTERRUPTED_RECOVERY_RETRY_OK' in (work/'recovery.log').read_text(errors='replace')
 assert hashlib.sha256((work/'source.raw').read_bytes()).digest()==hashlib.sha256((work/'target.raw').read_bytes()).digest()
 varsfile=work/'OVMF_VARS.fd';shutil.copy2('/usr/share/edk2/x64/OVMF_VARS.4m.fd',varsfile)
 # Real firmware boot: no -kernel/-initrd shortcut and no original/source disk attached.
 qemu(['-drive','if=pflash,format=raw,readonly=on,file=/usr/share/edk2/x64/OVMF_CODE.4m.fd','-drive',f'if=pflash,format=raw,file={varsfile}','-drive',f'file={work}/target.raw,format=raw,if=virtio'],work/'boot.log','NYX_RECOVERED_SYSTEM_BOOT_OK')
-print(json.dumps({'fixture':str(work),'passed':['offline read-only encrypted capture','mounted-source refusal','wrong credential refusal','verified plan without target writes','exact confirmation refusal','changed-target refusal','whole-disk restore and SHA256 match','completed-plan reapply refusal','UEFI firmware boot of recovered disk with source absent','switch_root into restored ext4 system','contents modes and symlink preserved'],'limits':['single x86-64 QEMU UEFI GPT/ext4 fixture','no real host disk or user data','no physical/hardware-change recovery','no Secure Boot/TPM/RAID/LVM qualification']},indent=2))
+print(json.dumps({'fixture':str(work),'passed':['offline read-only encrypted capture','mounted-source refusal','wrong credential refusal','verified plan without target writes','exact confirmation refusal','changed-target refusal','whole-disk restore and SHA256 match','completed-plan reapply refusal','UEFI firmware boot of recovered disk with source absent','switch_root into restored ext4 system','contents modes and symlink preserved'],'extended':extended,'limits':['single x86-64 QEMU UEFI GPT/ext4 fixture','no real host disk or user data','no physical/hardware-change recovery','no Secure Boot/TPM/RAID/LVM qualification']},indent=2))

@@ -13,7 +13,7 @@ mkdir -p "$share/nyx-backup/tools" "$share/nyx-backup/recovery" "$share/nyx-back
 install -m755 tools/build-recovery.py "$share/nyx-backup/tools/"
 install -m755 recovery/init "$share/nyx-backup/recovery/"
 install -m644 docs/RECOVERY.md "$share/nyx-backup/docs/"
-install -m644 data/setup-contract-v1.schema.json "$share/nyx-backup/"
+install -m644 data/setup-contract-v1.schema.json data/nyx-backup-control.json "$share/nyx-backup/"
 install -m644 data/io.github.design_nexus.nyx.Backup.desktop "$share/applications/"
 install -m644 data/io.github.design_nexus.nyx.Backup.svg "$share/icons/hicolor/scalable/apps/"
 # Avoid interpreting installation paths as sed replacement expressions.

@@ -13,10 +13,10 @@ pub fn status() -> Result<String> {
     client_call("Status", ())
 }
 pub fn start(profile: &str, operation: &str) -> Result<String> {
-    client_call("Start", (profile, operation))
+    admin_start(profile, operation, None)
 }
 pub fn capabilities() -> serde_json::Value {
-    serde_json::json!({"version":1,"coverage":"selected_user_data_and_readable_metadata","operations":["preview","backup","history","stats","verify","verify-full","cancel"],"restore":false,"local_restore":true,"local_migration":true,"setup_contract":"nyx-backup-setup/v1","local_restore_operations":["snapshots","browse","plan","diff","apply","rollback"],"offline_disk_recovery_tool":true,"recovery_boot_kit":true,"full_system_recovery":false,"automatic_retention":false})
+    serde_json::json!({"version":1,"coverage":"selected_user_data_and_readable_metadata","operations":["preview","backup","history","stats","verify","verify-full","cancel"],"restore":false,"local_restore":true,"local_migration":true,"setup_contract":"nyx-backup-setup/v1","local_restore_operations":["snapshots","browse","plan","diff","apply","rollback"],"offline_disk_recovery_tool":true,"recovery_boot_kit":true,"full_system_recovery":false,"s3_cloud_destinations":true,"github_settings_sync":true,"grant_control_interface":true,"automatic_retention":false})
 }
 
 /// Private local administration requests. These operations are never D-Bus methods.
@@ -28,6 +28,8 @@ pub struct AdminRequest {
     pub operation: String,
     pub confirm_profile: Option<String>,
     pub configuration: std::path::PathBuf,
+    #[serde(default)]
+    pub job: Option<String>,
     #[serde(default)]
     pub restore: Option<backup_restore::Request>,
     #[serde(default)]
@@ -44,6 +46,22 @@ impl AdminRequest {
         anyhow::ensure!(
             !(self.restore.is_some() && self.migration.is_some()),
             "Choose a single local operation payload"
+        );
+        if self.operation == "cancel" {
+            anyhow::ensure!(
+                self.restore.is_none() && self.migration.is_none(),
+                "Cancel accepts no secondary payload"
+            );
+            valid_id(
+                self.job
+                    .as_deref()
+                    .ok_or_else(|| anyhow::anyhow!("Choose an active job"))?,
+            )?;
+            return Ok(());
+        }
+        anyhow::ensure!(
+            self.job.is_none(),
+            "Job IDs are only accepted for cancellation"
         );
         if let Some(migration) = &self.migration {
             migration.validate()?;
@@ -62,8 +80,18 @@ impl AdminRequest {
             return Ok(());
         }
         anyhow::ensure!(
-            ["init", "validate", "retention-preview", "retention-apply"]
-                .contains(&self.operation.as_str()),
+            [
+                "init",
+                "validate",
+                "retention-preview",
+                "retention-apply",
+                "backup",
+                "verify",
+                "verify-full",
+                "history",
+                "stats"
+            ]
+            .contains(&self.operation.as_str()),
             "Unsupported local administration operation"
         );
         if self.operation == "retention-apply" {
@@ -102,6 +130,7 @@ pub fn admin_start(
         operation: operation.into(),
         confirm_profile: confirm_profile.map(Into::into),
         configuration: configuration_file(&Store::default()),
+        job: None,
         restore: None,
         migration: None,
     };
@@ -166,6 +195,7 @@ pub fn restore_read(profile: &str, restore: backup_restore::Request) -> Result<s
         operation: restore.operation().into(),
         confirm_profile: None,
         configuration: configuration_file(&Store::default()),
+        job: None,
         restore: Some(restore),
         migration: None,
     })?;
@@ -179,6 +209,7 @@ pub fn restore_start(profile: &str, restore: backup_restore::Request) -> Result<
         operation: restore.operation().into(),
         confirm_profile: None,
         configuration: configuration_file(&Store::default()),
+        job: None,
         restore: Some(restore),
         migration: None,
     })?;
@@ -217,6 +248,7 @@ pub fn migration_read(
         operation: migration.operation().into(),
         confirm_profile: None,
         configuration: configuration_file(&Store::default()),
+        job: None,
         restore: None,
         migration: Some(migration),
     })?;
@@ -230,6 +262,7 @@ pub fn migration_start(profile: &str, migration: backup_migrate::Request) -> Res
         operation: migration.operation().into(),
         confirm_profile: None,
         configuration: configuration_file(&Store::default()),
+        job: None,
         restore: None,
         migration: Some(migration),
     })?;
@@ -238,4 +271,23 @@ pub fn migration_start(profile: &str, migration: backup_migrate::Request) -> Res
         .ok_or_else(|| anyhow::anyhow!("Migration returned no job ID"))?;
     valid_id(id)?;
     Ok(id.into())
+}
+
+pub mod github_sync;
+pub mod integration;
+
+pub fn cancel(id: &str) -> Result<String> {
+    let store = Store::default();
+    let job = store.job(id)?;
+    local_request(AdminRequest {
+        version: 1,
+        profile: job.profile,
+        operation: "cancel".into(),
+        confirm_profile: None,
+        configuration: configuration_file(&store),
+        job: Some(id.into()),
+        restore: None,
+        migration: None,
+    })?;
+    Ok("Cancellation requested".into())
 }

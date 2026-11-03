@@ -201,6 +201,12 @@ pub enum DestinationKind {
         host: String,
         path: String,
     },
+    S3 {
+        endpoint: String,
+        region: String,
+        bucket: String,
+        path: String,
+    },
     Smb {
         server: String,
         share: String,
@@ -236,6 +242,51 @@ impl Destination {
                 ensure!(
                     path.starts_with('/') && !path.contains(['\n', '\r']),
                     "SFTP path must be absolute"
+                );
+            }
+            DestinationKind::S3 {
+                endpoint,
+                region,
+                bucket,
+                path,
+            } => {
+                if !endpoint.is_empty() {
+                    let url = url::Url::parse(endpoint).context("Use an HTTPS S3 endpoint")?;
+                    let loopback = matches!(url.host_str(), Some("127.0.0.1" | "[::1]" | "::1"));
+                    ensure!(
+                        (url.scheme() == "https" || (url.scheme() == "http" && loopback))
+                            && url.host_str().is_some()
+                            && url.username().is_empty()
+                            && url.password().is_none()
+                            && url.query().is_none()
+                            && url.fragment().is_none()
+                            && url.path() == "/",
+                        "S3 endpoint must be HTTPS without credentials, paths or query parameters; HTTP is limited to literal loopback fixtures"
+                    );
+                }
+                ensure!(
+                    !bucket.is_empty()
+                        && bucket.len() <= 63
+                        && bucket.bytes().all(|b| b.is_ascii_lowercase()
+                            || b.is_ascii_digit()
+                            || b".-".contains(&b))
+                        && !bucket.starts_with(['.', '-'])
+                        && !bucket.ends_with(['.', '-']),
+                    "Use a valid lower-case S3 bucket name"
+                );
+                ensure!(
+                    !region.is_empty()
+                        && region
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b)),
+                    "S3 region is required"
+                );
+                ensure!(
+                    path.split('/').all(|s| s != ".." && s != ".")
+                        && path
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b"/_-.".contains(&b)),
+                    "S3 repository prefix may contain letters, digits, slashes, dashes, underscores and dots; no traversal"
                 );
             }
             DestinationKind::Smb {
