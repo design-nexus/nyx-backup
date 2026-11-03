@@ -20,9 +20,13 @@ Versioned native/foreign package and Flatpak inventories are included in new enc
 
 See [migration workflow and contract](MIGRATION.md). Local binary/language-manager inventory, arbitrary configuration conversion, automatic foreign/Flatpak/hardware installation, actual cross-machine/boot qualification and GUI interaction remain outside delivered coverage. A disposable fixture proves synthetic different-home/hardware planning, file apply/rollback and a recording-stub package installer boundary. No real package install was performed. The legacy generated Setup workflow and `omarchy-backup` remain unchanged.
 
-## Phase 4: system recovery
+## Phase 4: offline disk recovery — implemented, VM-qualified path
 
-Privileged recovery tooling and a bootable environment. Destructive recovery tests are confined to VMs. No complete-system/boot recovery claim before an end-to-end VM recovery succeeds.
+Version 0.4.0 delivers an independent root-run offline disk helper and a bootable x86-64 kernel/initramfs/unsigned UEFI kit. Read-only, unmounted whole disks can be captured into encrypted Restic repositories. Recovery stages and hashes the image, binds a plan to a same-geometry target and its full content fingerprint, requires exact overwrite confirmation, journals before writing, then syncs and verifies every target byte. No desktop privilege service, integration recovery method or automatic disk writer is introduced.
+
+The end-to-end disposable QEMU test captures a GPT/UEFI/ext4 system fixture, restores a separate disk, compares every byte, then boots only the recovered disk through UEFI firmware and switches into its restored root. Destructive tests attach only disposable regular disk files. See [workflow and limits](RECOVERY.md) and [qualification](QUALIFICATION.md).
+
+Qualification is narrow: this is not a demonstrated full Omarchy/physical-machine recovery. Hardware changes, Secure Boot, TPM/root-encryption unlock, RAID/LVM, remote recovery transports, power-loss recovery and physical storage drivers remain unqualified. The integration flag `full_system_recovery` remains false. Ordinary selected-data profiles are not whole-disk captures.
 
 ## Phase 5: ecosystem and remote providers
 

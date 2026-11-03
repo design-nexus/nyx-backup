@@ -1,0 +1,20 @@
+#!/bin/sh
+export PATH=/usr/bin:/bin
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts /run /tmp /mnt
+mount -t devpts devpts /dev/pts
+mount -t tmpfs -o mode=0700 tmpfs /run
+mount -t tmpfs -o mode=1777 tmpfs /tmp
+modprobe virtio_pci
+modprobe virtio_blk
+modprobe ext4
+modprobe vfat
+modprobe nls_cp437
+modprobe nls_iso8859_1
+printf '\nNyx Backup offline recovery\n'
+printf 'No disks are mounted or changed automatically. Networking is not configured.\n'
+printf 'Use nyx-backup-recovery --help and /RECOVERY.md.\n'
+printf 'Mount separate repository and scratch storage yourself.\n'
+exec setsid cttyhack sh

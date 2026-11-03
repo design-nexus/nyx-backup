@@ -8,6 +8,7 @@ Rust 2024 workspace with independent domain crates:
 - `backup-service`: versioned session D-Bus API, approved-profile execution, CLI administration and a systemd-owned daemon.
 - `backup-restore`: profile-owned snapshot browsing, private staging/verification, exact plans, content diffs, descriptor-relative file replacement, conflict policies and rollback journals.
 - `backup-migrate`: versioned package/hardware inventory handoff, target mapping, hardware/package decisions and a target-bound Setup consumer; reuses reviewed restore staging and rollback.
+- `backup-recovery`: independent offline root CLI, exact disk images/Restic manifests, target-bound reviewed overwrite and verification receipts. It is not linked into service or GUI.
 - `apps/backup`: GTK4 0.11, pinned Nyx Core/Design 2.0 widgets, theme engine and icon system. Blocking work stays off the GTK thread.
 
 The restore and migration crates are delivered in Phases 2 and 3. No Settings engine, Core Control destructive API, `omarchy-backup` replacement or global watcher is introduced. Setup is an explicit installed consumer; see MIGRATION.md.
@@ -48,3 +49,10 @@ The future Control Center status contract is `Health` v1: coverage, active job/p
 The private local request accepts a typed `restore` payload. Read-only actions (snapshot history/browse, plan/receipt inspection, diff and rollback preview) return bounded results directly; plaintext diffs are never inserted into a job journal. Plan preparation, apply and rollback are admitted as background jobs with the same held operation lock, cancellation and job-change signals. Requests are tied to the same configuration context and UID as other local administration. Apply and rollback require exact plan-ID confirmation. D-Bus `Start` retains its original allowlist and rejects every restore operation. `Capabilities.restore` still describes integration exposure (`false`); `local_restore` and `local_restore_operations` describe explicit local functionality.
 
 Plans pin an exact owned snapshot, selected archive paths, target mapping, conflict policy and fingerprints. Apply uses staged data and current target checks. Intent and retained-original locations are synced before replacement; no-replace renames protect concurrent target creation. Rollback consults both the journal and filesystem, retaining changed files and recovery copies on conflict. See RESTORE.md for metadata, concurrency, storage and filesystem limits.
+
+
+## Offline recovery boundary (Phase 4)
+
+The desktop can build a boot kit, but cannot elevate or issue recovery writes. `nyx-backup-recovery` has no IPC listener and is never setuid; mutating commands require root plus the separate boot-environment marker and kernel parameter. A local encrypted repository uses a password entered on the controlling terminal or stdin pipe; fresh inherited descriptors supply Restic credentials without the desktop keyring. No existing user configuration or Secret Service state is imported into the kit.
+
+Recovery manifests describe whole-disk length, logical sectors, source identity and SHA-256. Exact tagged snapshots contain `/manifest.json` and `/disk.img`. Plans retain a root-private image and target identity/full-content fingerprint, then journal `prepared → applying → verified`. Interrupted `applying` plans cannot be resumed; a fresh plan is needed. There is no disk rollback. See RECOVERY.md for storage requirements, constraints and actual VM evidence.

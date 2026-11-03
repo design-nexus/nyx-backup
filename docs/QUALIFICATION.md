@@ -78,3 +78,19 @@ Delivered as version 0.3.0. New encrypted snapshots include versioned package/ha
 Read-only host inventory was inspected, but no real user sources or live NAS credentials were selected. This proves synthetic migration mechanics, not physical different-machine compatibility, display behavior, real package installation, full-system or boot recovery. Flatpaks, foreign builds and recognized hardware packages require manual review; local binaries/language-manager inventory is missing coverage. Power-loss, SMB/NFS endpoints and GUI interaction remain unverified.
 
 Installation: all three Rust binaries match the release artifacts; the Setup consumer and contract match their sources. Launcher/icon and activation resources are installed. The idle background service was restarted and returned `local_migration: true` and `setup_contract: nyx-backup-setup/v1`. No schedule was enabled and the GUI was not opened or restarted.
+
+
+## Phase 4: offline disk recovery (2026-11-02)
+
+Delivered as version 0.4.0: independent offline root-run helper, standard encrypted Restic disk captures, verified target-bound overwrite plans/receipts, local boot-kit builder and Restore-page kit creation. No privileged desktop service or destructive integration method is installed.
+
+- `cargo test --locked -p backup-recovery`: **3 passed**, covering exact IDs/clean paths, short-read/hash behavior and ordinary-file refusal.
+- `python3 tools/recovery-smoke.py`: **passed** with KVM/QEMU, installed kernel 7.2.11-arch1-1, OVMF UEFI firmware and disposable regular disk files. The first guest creates a 384 MiB GPT/ESP/ext4 fixture with boot files and a minimal root system. It refuses capture while mounted, marks the source disk read-only, captures into an encrypted Restic repository, rejects wrong credentials, prepares an exact-image target plan, refuses wrong confirmation and post-preview target changes, restores and syncs a separate target and compares whole-disk SHA-256. Reapplying the completed plan is refused.
+- A second VM attaches **only the recovered target** and UEFI firmware, without `-kernel`/`-initrd` shortcuts. It boots the restored EFI image, mounts the recovered ext4 root, verifies file content, mode 0640 and a symlink, and uses `switch_root` into the recovered `/sbin/init`, which emits the explicit boot-success marker and powers off.
+- Locked release workspace build passed, including GTK. Existing deprecated GTK APIs and upstream future-compatibility warnings remain. Recovery mutation from the ordinary desktop was refused before opening the supplied device path.
+- All destructive operations ran inside guests; no host block devices, real user sources or live NAS credentials were selected or attached. The fixture source, target and logs are under ignored `target/nyx-recovery-vm-*` directories.
+
+This demonstrates exact disk recovery and boot of **one synthetic x86-64 UEFI GPT/ext4 system**, not complete Omarchy, physical-machine or cross-PC recovery. Secure Boot, TPM/encrypted-root boot, RAID/LVM, alternate disk geometry, physical storage drivers, remote recovery transports and real power-loss behavior remain unqualified. Boot kit images are unsigned. No rendered GUI/interaction review was run. The desktop still reports `full_system_recovery: false`.
+
+
+Phase 4 delivery checks: all 21 existing engine/restore domain tests passed alongside the 3 new recovery tests. Formatting and whitespace checks passed. All four installed Rust executables match release artifacts; launcher/icon, Setup consumer, kit builder, recovery documentation and activation resources are installed. The installed builder created a ready kit at `~/.local/share/nyx-backup/recovery-kits/0.4.0` using the VM-tested kernel; every artifact matches its checksum manifest. The idle background service was restarted and reports the offline tool/kit capabilities while retaining `full_system_recovery: false`. No schedule was enabled; the GUI was not opened or restarted.

@@ -53,6 +53,12 @@ pub fn refresh(ui: &Rc<Ui>) {
         "Read current package and hardware inventory",
         move || migration_ui::inventory(&u),
     ));
+    let u = ui.clone();
+    ui.restore.append(&action(
+        "drive-harddisk-symbolic",
+        "Offline disk recovery and boot kit",
+        move || recovery_ui::show(&u),
+    ));
     let c = match Store::default().load() {
         Ok(c) => c,
         Err(_) => return,
@@ -101,7 +107,7 @@ pub fn refresh(ui: &Rc<Ui>) {
         row.append(&actions);
         ui.restore.append(&row);
     }
-    ui.restore.append(&card("Recovery scope","Restores file contents, symlinks, modes and modification times. Ownership, ACLs and extended attributes are not applied. Close apps before replacing their configuration. Complete-system, cross-PC and boot recovery remain later phases."));
+    ui.restore.append(&card("Recovery scope","Restores file contents, symlinks, modes and modification times. Ownership, ACLs and extended attributes are not applied. Close apps before replacing their configuration. Offline whole-disk recovery uses a separate boot environment and explicitly captured disk images. Ordinary profiles remain selected-data backups. Physical and cross-PC system recovery remain unqualified."));
 }
 fn snapshots(ui: &Rc<Ui>, profile: String, quick: bool) {
     let next = profile.clone();

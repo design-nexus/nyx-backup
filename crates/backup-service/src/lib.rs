@@ -16,7 +16,7 @@ pub fn start(profile: &str, operation: &str) -> Result<String> {
     client_call("Start", (profile, operation))
 }
 pub fn capabilities() -> serde_json::Value {
-    serde_json::json!({"version":1,"coverage":"selected_user_data_and_readable_metadata","operations":["preview","backup","history","stats","verify","verify-full","cancel"],"restore":false,"local_restore":true,"local_migration":true,"setup_contract":"nyx-backup-setup/v1","local_restore_operations":["snapshots","browse","plan","diff","apply","rollback"],"full_system_recovery":false,"automatic_retention":false})
+    serde_json::json!({"version":1,"coverage":"selected_user_data_and_readable_metadata","operations":["preview","backup","history","stats","verify","verify-full","cancel"],"restore":false,"local_restore":true,"local_migration":true,"setup_contract":"nyx-backup-setup/v1","local_restore_operations":["snapshots","browse","plan","diff","apply","rollback"],"offline_disk_recovery_tool":true,"recovery_boot_kit":true,"full_system_recovery":false,"automatic_retention":false})
 }
 
 /// Private local administration requests. These operations are never D-Bus methods.

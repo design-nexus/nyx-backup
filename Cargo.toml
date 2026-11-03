@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["apps/backup", "crates/*"]
-default-members = ["crates/backup-core", "crates/backup-system", "crates/backup-engine", "crates/backup-service", "crates/backup-restore", "crates/backup-migrate"]
+default-members = ["crates/backup-core", "crates/backup-system", "crates/backup-engine", "crates/backup-service", "crates/backup-restore", "crates/backup-migrate", "crates/backup-recovery"]
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/design-nexus/nyx-backup"

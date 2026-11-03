@@ -1,21 +1,21 @@
 # Nyx Backup
 
-A Rust/GTK4 desktop app for encrypted Restic backups of **selected user data and readable system metadata**. Standard Restic tools can read its repositories. The app is unprivileged and makes no complete-system, boot-recovery or cross-PC recovery claim. Phase 2 adds staged selective restoration, dotfile diffs, conflict handling and rollback. Phase 3 adds package inventories, reviewed user/hardware migration planning and a versioned Setup consumer.
+A Rust/GTK4 desktop app for encrypted Restic backups of **selected user data and readable system metadata**. Standard Restic tools can read its repositories. The app is unprivileged and makes no complete-system, boot-recovery or cross-PC recovery claim. Phase 2 adds staged selective restoration, dotfile diffs, conflict handling and rollback. Phase 3 adds package inventories, reviewed user/hardware migration planning and a versioned Setup consumer. Phase 4 adds a separate offline whole-disk recovery helper and bootable recovery kit, qualified against a disposable UEFI VM.
 
 The interface has Overview, Backups, Restore and Settings. Backup and repository-administration jobs belong to an on-demand systemd user service, so closing the window does not stop them. Scheduling and retention deletion require explicit action.
 
 ## Install and develop
 
-Requires Linux, Rust (2024 edition), GTK4 ≥4.18, Restic, Rclone, `secret-tool`, a session Secret Service, D-Bus and systemd user services. SSH supplies SFTP authentication; NFS mounting requires an administrator's existing user-mountable fstab entry. No root helper or lingering is installed.
+Requires Linux, Rust (2024 edition), GTK4 ≥4.18, Restic, Rclone, `secret-tool`, a session Secret Service, D-Bus and systemd user services. SSH supplies SFTP authentication; NFS mounting requires an administrator's existing user-mountable fstab entry. No privileged desktop service, setuid helper or lingering is installed. Offline disk recovery requires booting its separate root environment.
 
 ```sh
 cargo build --release --locked --workspace
 ./install.sh --skip-build
 ```
 
-Installation includes `nyx-backup`, `nyx-backupctl`, `nyx-backupd` and the `nyx-backup-setup` consumer in `~/.local/bin`, the launcher/icon in XDG data directories, D-Bus activation, and the user service. It does not launch the GUI, enable timers or restart an existing instance. `./install.sh` also builds. Shared dependencies use immutable published revisions.
+Installation includes `nyx-backup`, `nyx-backupctl`, `nyx-backupd` the `nyx-backup-setup` consumer, `nyx-backup-recovery` and its kit builder in `~/.local/bin`, the launcher/icon in XDG data directories, D-Bus activation, and the user service. It does not launch the GUI, enable timers or restart an existing instance. `./install.sh` also builds. Shared dependencies use immutable published revisions.
 
-Headless libraries and CLI/service build with `cargo build --locked` (the default workspace members exclude GTK). The GUI lives in `apps/backup`; domain crates live in `crates/backup-{core,system,engine,restore,migrate,service}`.
+Headless libraries and CLI/service build with `cargo build --locked` (the default workspace members exclude GTK). The GUI lives in `apps/backup`; domain crates live in `crates/backup-{core,system,engine,restore,migrate,recovery,service}`.
 
 ```sh
 cargo fmt --all --check
@@ -92,6 +92,6 @@ Cancellation also interrupts file-source preparation before Restic starts. A can
 
 The app restores contents, symlinks, modes and modification times; ownership, ACLs, extended attributes and hard-link topology are not applied. Private staging and recovery copies are retained. Close apps before replacing their configuration.
 
-For reviewed migration and Setup handoff, see [Phase 3 workflow](docs/MIGRATION.md).
+For reviewed migration and Setup handoff, see [Phase 3 workflow](docs/MIGRATION.md). For explicitly captured offline disk images and boot kits, see [Phase 4 recovery](docs/RECOVERY.md). Selected-data snapshots cannot become whole-disk images retroactively.
 
 See [architecture/API](docs/ARCHITECTURE.md), [security](docs/SECURITY.md), [capabilities and roadmap](docs/ROADMAP.md), and [Restic recovery documentation](https://restic.readthedocs.io/en/stable/050_restore.html).
