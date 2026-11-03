@@ -23,7 +23,7 @@ fn standard() -> settings_card::Standard {
     settings_card::Standard {
         app: "backup",
         about: settings_card::About {
-            name: "Nyx Backup",
+            name: "Backup",
             icon: APP_ID,
             version: env!("CARGO_PKG_VERSION"),
             description: "Encrypted backups of selected user data",
@@ -1168,7 +1168,7 @@ fn build(app: &gtk::Application) {
     });
     let window = gtk::ApplicationWindow::builder()
         .application(app)
-        .title("Nyx Backup")
+        .title("Backup")
         .default_width(1280)
         .default_height(800)
         .build();
@@ -1178,7 +1178,7 @@ fn build(app: &gtk::Application) {
     outer.add_css_class("window-frame");
     overlay.set_child(Some(&outer));
     window.set_child(Some(&overlay));
-    let header = chrome::app_header(&window, APP_ID, "Nyx Backup");
+    let header = chrome::app_header(&window, APP_ID, "Backup");
     outer.append(&header.root);
     let main = w::hbox(0);
     main.set_vexpand(true);
@@ -1339,7 +1339,7 @@ fn build(app: &gtk::Application) {
             Some("settings") => "Settings",
             _ => "Overview",
         };
-        chrome::set_title(&title_window, "Nyx Backup", title);
+        chrome::set_title(&title_window, "Backup", title);
         subtitle.set_text(title);
         subtitle.set_visible(true);
         let name = s.visible_child_name().unwrap_or_default();
@@ -1356,13 +1356,16 @@ fn build(app: &gtk::Application) {
         }
     });
     stack.set_visible_child_name("overview");
-    chrome::set_title(&window, "Nyx Backup", "Overview");
+    chrome::set_title(&window, "Backup", "Overview");
     header.set_subtitle("Overview");
     nav_buttons.borrow()[0].add_css_class("active");
     let sidebar_width = sidebar.clone();
     let labels_width = nav_labels.clone();
     let compact_width = compact.clone();
     window.add_tick_callback(move |window, _| {
+        if settings_card::is_open() {
+            settings_card::fit(window);
+        }
         let on = window.width() < 980 || compact_width.get();
         sidebar_width.set_width_request(if on { 56 } else { 212 });
         for l in labels_width.borrow().iter() {

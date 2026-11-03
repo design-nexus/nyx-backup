@@ -129,8 +129,10 @@ pub fn run(ui: &Rc<Ui>) {
             let n = i / 2;
             let width = if n < 4 { 1600 } else { 800 };
             if i % 2 == 0 {
+                u.window.allocate(width, 900, -1, None);
                 if n % 4 == 3 {
                     settings(&u);
+                    settings_card::fit(&u.window);
                 } else {
                     if settings_card::is_open() {
                         settings_card::escape();

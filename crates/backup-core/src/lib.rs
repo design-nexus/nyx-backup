@@ -12,7 +12,7 @@ pub const OBJECT: &str = "/io/github/design_nexus/nyx/Backup1";
 pub fn init() {
     nyx_core::app::init(nyx_core::app::App {
         slug: "nyx-backup",
-        name: "Nyx Backup",
+        name: "Backup",
     });
 }
 pub fn now() -> u64 {

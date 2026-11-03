@@ -512,13 +512,13 @@ pub fn notify(success: bool) {
     // No source paths, repository locations, or child diagnostics enter notifications.
     let _ = clean_command("notify-send")
         .args([
-            "--app-name=Nyx Backup",
+            "--app-name=Backup",
             if success {
                 "Backup completed"
             } else {
                 "Backup needs attention"
             },
-            "Open Nyx Backup to review the result.",
+            "Open Backup to review the result.",
         ])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
