@@ -22,32 +22,33 @@ pub fn save_password(id: &str, secret: &Secret) -> Result<()> {
 /// Scheduled work must fail promptly instead of waiting for an unlock prompt.
 pub fn ensure_secret_unlocked(id: &str, kind: &str) -> Result<()> {
     valid_id(id)?;
-    let connection = zbus::blocking::Connection::session()?;
-    let proxy = zbus::blocking::Proxy::new(
-        &connection,
-        "org.freedesktop.secrets",
-        "/org/freedesktop/secrets",
-        "org.freedesktop.Secret.Service",
-    )?;
-    for application in ["nyx-backup", "nixe-backup"] {
-        let attributes = std::collections::HashMap::from([
-            ("application", application),
-            ("account", id),
-            ("kind", kind),
-        ]);
-        let (unlocked, locked): (
-            Vec<zbus::zvariant::OwnedObjectPath>,
-            Vec<zbus::zvariant::OwnedObjectPath>,
-        ) = proxy.call("SearchItems", &(attributes,))?;
-        if !unlocked.is_empty() {
-            return Ok(());
+    zbus::block_on(async {
+        let connection = zbus::Connection::session().await?;
+        let proxy = zbus::Proxy::new(
+            &connection,
+            "org.freedesktop.secrets",
+            "/org/freedesktop/secrets",
+            "org.freedesktop.Secret.Service",
+        )
+        .await?;
+        for application in ["nyx-backup", "nixe-backup"] {
+            let attributes = std::collections::HashMap::from([
+                ("application", application),
+                ("account", id),
+                ("kind", kind),
+            ]);
+            let (unlocked, locked): (Vec<zbus::OwnedObjectPath>, Vec<zbus::OwnedObjectPath>) =
+                proxy.call("SearchItems", &(attributes,)).await?;
+            if !unlocked.is_empty() {
+                return Ok(());
+            }
+            ensure!(
+                locked.is_empty(),
+                "Secret Service credential is locked. Unlock the keyring before starting this operation."
+            );
         }
-        ensure!(
-            locked.is_empty(),
-            "Secret Service credential is locked. Unlock the keyring before starting this operation."
-        );
-    }
-    anyhow::bail!("No saved credential for this destination. Set it up in Backup first.")
+        anyhow::bail!("No saved credential for this destination. Set it up in Backup first.")
+    })
 }
 pub fn password(id: &str) -> Result<Secret> {
     ensure_secret_unlocked(id, "repository")?;

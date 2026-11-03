@@ -19,3 +19,6 @@ gtk = { package = "gtk4", version = "0.11", features = ["v4_18"] }
 nyx-ui = { git = "https://github.com/design-nexus/nyx-design.git", rev = "230278515fbd78ea51667e8f980bf0c234e8946c" }
 nyx-theme = { git = "https://github.com/design-nexus/nyx-design.git", rev = "230278515fbd78ea51667e8f980bf0c234e8946c" }
 nyx-icons = { git = "https://github.com/design-nexus/nyx-design.git", rev = "230278515fbd78ea51667e8f980bf0c234e8946c" }
+
+[features]
+ui-review = []

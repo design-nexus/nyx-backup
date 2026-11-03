@@ -3,7 +3,7 @@ resolver = "3"
 members = ["apps/backup", "crates/*"]
 default-members = ["crates/backup-core", "crates/backup-system", "crates/backup-engine", "crates/backup-service", "crates/backup-restore", "crates/backup-migrate", "crates/backup-recovery"]
 [workspace.package]
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/design-nexus/nyx-backup"
@@ -15,8 +15,8 @@ toml = "1"
 uuid = { version = "1", features = ["v4"] }
 libc = "0.2"
 fs2 = "0.4"
-nyx-core = { git = "https://github.com/design-nexus/nyx-core.git", rev = "9dc196245bbf0ccc93b8bf04ac61bb476b85e4d5", default-features = false }
-nyx-sync = { git = "https://github.com/design-nexus/nyx-core.git", rev = "9dc196245bbf0ccc93b8bf04ac61bb476b85e4d5" }
+nyx-core = { git = "https://github.com/design-nexus/nyx-core.git", rev = "1c309f2912d5eff5e1a3f5eeca8b91cc3c5bcf76", default-features = false }
+nyx-sync = { git = "https://github.com/design-nexus/nyx-core.git", rev = "1c309f2912d5eff5e1a3f5eeca8b91cc3c5bcf76", default-features = false }
 backup-core = { path = "crates/backup-core" }
 backup-system = { path = "crates/backup-system" }
 backup-engine = { path = "crates/backup-engine" }

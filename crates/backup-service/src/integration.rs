@@ -63,19 +63,23 @@ pub fn issue(
     );
     // Explicit grant setup may activate the on-demand service; passive tiles never do.
     crate::client_call("Capabilities", ())?;
-    let c = zbus::blocking::Connection::session()?;
-    let p = zbus::blocking::Proxy::new(
-        &c,
-        "org.freedesktop.DBus",
-        "/org/freedesktop/DBus",
-        "org.freedesktop.DBus",
-    )?;
-    let owner: String = p.call("GetNameOwner", &(consumer,))?;
-    let uid: u32 = p.call("GetConnectionUnixUser", &(&owner,))?;
-    ensure!(
-        uid == unsafe { libc::geteuid() },
-        "Consumer must run as the current user"
-    );
+    let (owner, uid) = zbus::block_on(async {
+        let c = zbus::Connection::session().await?;
+        let p = zbus::Proxy::new(
+            &c,
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+        )
+        .await?;
+        let owner: String = p.call("GetNameOwner", &(consumer,)).await?;
+        let uid: u32 = p.call("GetConnectionUnixUser", &(&owner,)).await?;
+        ensure!(
+            uid == unsafe { libc::geteuid() },
+            "Consumer must run as the current user"
+        );
+        Ok::<_, anyhow::Error>((owner, uid))
+    })?;
     let g = Grant {
         version: 1,
         id: id(),

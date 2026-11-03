@@ -1,6 +1,6 @@
-# Phase 6 security and qualification review — 2026-11-02
+# Security and qualification review — updated 2026-11-03
 
-This is a source/boundary review plus focused runtime qualification, not an independent penetration test or security certification. Scope: Backup 0.6.0, its selected-data engine/restore/migration/offline helpers, new S3/GitHub/grant boundaries, and the Control Center provider. Installed external tools and operating-system services retain their own trust boundaries.
+This is a source/boundary review plus focused runtime qualification, not an independent penetration test or security certification. Scope: Backup 0.6.1, its selected-data engine/restore/migration/offline helpers, new S3/GitHub/grant boundaries, and the Control Center provider. Installed external tools and operating-system services retain their own trust boundaries.
 
 ## Changes resulting from the review
 
@@ -21,7 +21,7 @@ The OSV batch API was queried for all **325 crates.io packages** in the locked B
 | zvariant | 5.15.1 | [RUSTSEC-2026-0370](https://rustsec.org/advisories/RUSTSEC-2026-0370.html); standalone wire crate moved into zbus 6 |
 | zvariant_derive | 5.15.1 | [RUSTSEC-2026-0372](https://rustsec.org/advisories/RUSTSEC-2026-0372.html); macros moved into zbus 6 |
 
-These remain explicit maintenance debt. Migrating the shared encryption/i18n graph and D-Bus major version is separate compatibility work; no advisory is silently suppressed and pinned shared revisions are preserved. This check does not audit Git sources, external Restic/Rclone/GitHub CLI binaries, distro packages, GTK C libraries, the kernel, firmware or unknown vulnerabilities.
+Resolved for Backup in 0.6.1: zbus 6.2.1 replaces the standalone unmaintained D-Bus crates. A published credentials-only nyx-sync feature removes the unused age/HTTP synchronization stack from Backup while retaining existing shared consumers’ default behavior. The current locked graph contains **183 crates.io packages; the repeated OSV query returned no findings**. No advisory is suppressed. The table above records the initial findings, not remaining dependencies. This check does not audit Git sources, external Restic/Rclone/GitHub CLI binaries, distro packages, GTK C libraries, the kernel, firmware or unknown vulnerabilities.
 
 ## Runtime evidence and remaining boundaries
 
@@ -30,3 +30,12 @@ QUALIFICATION.md records exact commands/results. New qualification uses signed l
 A local 32 MiB random-data + 200-small-file fixture records initial/incremental timings and actual Restic data added. It is a reproducible small-data baseline, not a throughput guarantee, large-NAS benchmark or capacity recommendation. The provider's subscription stop behavior is qualified headlessly; hidden panels have no repeating Backup poll timer.
 
 No real cloud/GitHub account, real user sources or live NAS credentials are used. Real commercial providers, live SMB/NFS endpoints, GUI appearance/interaction, large datasets, physical removal and genuine host power loss remain unqualified. The interrupted-worker VM test is not electrical power-loss testing. Physical Omarchy, different-machine, Secure Boot, TPM/encrypted-root, RAID/LVM and alternate geometry recovery retain the Phase 4 limits. `full_system_recovery` stays false.
+
+
+## Completion pass (0.6.1)
+
+Rendered all four Backup pages at 1600 and 800 pixels in an isolated GTK Broadway fixture, in dark and light themes. Scripted checks cover all six destination field sets, invalid-save refusal without configuration mutation, Cancel/Escape, profile/recovery dialogs, shared command palette and Ctrl+Q. Destination forms now show relevant fields and help, Overview recovery copy is current, idle cancellation is disabled, and advertised close/palette shortcuts are installed through the shared Nyx handler. Physical desktop input and native file/keyring prompts are not claimed by this software-rendered fixture.
+
+Authenticated SMB initial/incremental backup, full-data verification and selective restoration (contents/mode 0640) passed against Samba 4.25.0. The server runs in a private user/mount namespace with delegated UID/GID mappings, private account database and loopback port. No host mount definitions, real NAS credentials or user sources were changed. Wrong credentials and disconnected-server checks fail safely. Commercial NAS firmware and live NFS endpoints remain environment-specific qualification.
+
+The installed Rclone 1.75.2 is newer than the 1.75.1 fix listed for [GHSA-38xv-hf3p-h7mq](https://github.com/rclone/rclone/security/advisories/GHSA-38xv-hf3p-h7mq). This does not constitute a complete external-tool audit. Broad physical-system recovery and live cloud/GitHub account claims remain outside the qualified scope.

@@ -2,6 +2,8 @@ mod ecosystem_ui;
 mod migration_ui;
 mod recovery_ui;
 mod restore_ui;
+#[cfg(feature = "ui-review")]
+mod ui_review;
 use backup_core::*;
 use gtk::{gio, glib, prelude::*};
 use nyx_ui::{chrome, settings_card, widgets as w};
@@ -812,8 +814,13 @@ fn edit_destination(ui: &Rc<Ui>, destination: Option<Destination>) {
     d.add_button("Cancel", gtk::ResponseType::Cancel);
     d.add_button("Save", gtk::ResponseType::Accept);
     let b = form(&d);
-    let id = entry(
-        &b,
+    let field = |title: &str, value: &str| {
+        let group = w::vbox(6);
+        let input = entry(&group, title, value);
+        b.append(&group);
+        input
+    };
+    let id = field(
         "Destination ID",
         destination
             .as_ref()
@@ -821,8 +828,7 @@ fn edit_destination(ui: &Rc<Ui>, destination: Option<Destination>) {
             .unwrap_or("backup-drive"),
     );
     id.set_editable(destination.is_none());
-    let name = entry(
-        &b,
+    let name = field(
         "Name",
         destination
             .as_ref()
@@ -855,8 +861,7 @@ fn edit_destination(ui: &Rc<Ui>, destination: Option<Destination>) {
         .map(|d| serde_json::to_value(d).unwrap())
         .unwrap_or_default();
     let val = |key: &str| old[key].as_str().unwrap_or("");
-    let path = entry(
-        &b,
+    let path = field(
         "Repository path (absolute local/SFTP; relative SMB/S3 prefix)",
         val("path"),
     );
@@ -875,8 +880,7 @@ fn edit_destination(ui: &Rc<Ui>, destination: Option<Destination>) {
         }
     });
     b.append(&browse);
-    let host = entry(
-        &b,
+    let host = field(
         "SSH host alias or SMB server",
         if index == 4 {
             val("server")
@@ -884,9 +888,8 @@ fn edit_destination(ui: &Rc<Ui>, destination: Option<Destination>) {
             val("host")
         },
     );
-    let endpoint = entry(&b, "S3 HTTPS endpoint (blank for AWS)", val("endpoint"));
-    let region = entry(
-        &b,
+    let endpoint = field("S3 HTTPS endpoint (blank for AWS)", val("endpoint"));
+    let region = field(
         "S3 region",
         if val("region").is_empty() {
             "us-east-1"
@@ -894,18 +897,16 @@ fn edit_destination(ui: &Rc<Ui>, destination: Option<Destination>) {
             val("region")
         },
     );
-    let bucket = entry(&b, "S3 bucket", val("bucket"));
-    let share = entry(&b, "SMB share", val("share"));
-    let user = entry(&b, "SMB username", val("username"));
-    let domain = entry(&b, "SMB domain (optional)", val("domain"));
-    let mount = entry(
-        &b,
+    let bucket = field("S3 bucket", val("bucket"));
+    let share = field("SMB share", val("share"));
+    let user = field("SMB username", val("username"));
+    let domain = field("SMB domain (optional)", val("domain"));
+    let mount = field(
         "NFS mount point (administrator configured)",
         val("mount_point"),
     );
-    let source = entry(&b, "NFS source (server:/export)", val("source"));
-    let filesystem = entry(
-        &b,
+    let source = field("NFS source (server:/export)", val("source"));
+    let filesystem = field(
         "NFS filesystem type (nfs or nfs4)",
         if val("filesystem").is_empty() {
             "nfs4"
@@ -913,11 +914,15 @@ fn edit_destination(ui: &Rc<Ui>, destination: Option<Destination>) {
             val("filesystem")
         },
     );
-    b.append(&text("Mounted storage is bound to its exact mount point, filesystem and source when saved. NFS requires an existing user/users fstab entry. SFTP uses existing SSH settings and agent authentication. Set repository and SMB passwords separately after saving.","dim-label"));
+    let guidance = text("", "dim-label");
+    b.append(&guidance);
     let error = text("", "error");
     b.append(&error);
-    // Keep irrelevant fields visible but disabled so their purpose stays clear.
+    // Show only the selected transport fields, including their labels.
     let update = {
+        let guidance = guidance.clone();
+        let browse = browse.clone();
+        let path = path.clone();
         let endpoint = endpoint.clone();
         let region = region.clone();
         let bucket = bucket.clone();
@@ -929,15 +934,42 @@ fn edit_destination(ui: &Rc<Ui>, destination: Option<Destination>) {
         let source = source.clone();
         let filesystem = filesystem.clone();
         move |i| {
-            host.set_sensitive(i == 3 || i == 4);
+            let show = |input: &gtk::Entry, visible: bool| {
+                input.set_sensitive(visible);
+                if let Some(group) = input.parent() {
+                    group.set_visible(visible);
+                }
+            };
+            show(&host, i == 3 || i == 4);
             for e in [&endpoint, &region, &bucket] {
-                e.set_sensitive(i == 5);
+                show(e, i == 5);
             }
             for e in [&share, &user, &domain] {
-                e.set_sensitive(i == 4);
+                show(e, i == 4);
             }
             for e in [&mount, &source, &filesystem] {
-                e.set_sensitive(i == 2);
+                show(e, i == 2);
+            }
+            browse.set_visible(i <= 2);
+            guidance.set_text(match i {
+                0=>"Choose a writable folder. Set the repository password after saving. For removable media, select Mounted storage to bind the device identity.",
+                1=>"Saving binds this destination to its exact mount point, filesystem and source. Keep the device connected during repository operations.",
+                2=>"NFS needs an administrator-preconfigured user/users fstab entry. Backup manages that existing mount without creating system definitions.",
+                3=>"SFTP uses your existing SSH configuration and agent authentication. Approve host keys outside Backup. Set the repository password after saving.",
+                4=>"Set NAS credentials and the repository password separately after saving. NAS passwords stay in Secret Service and encrypted Rclone configuration.",
+                _=>"Use an existing bucket. Set cloud credentials and the repository password separately after saving. Connectivity testing, validation and initialization are separate actions."
+            });
+            if let Some(label) = path
+                .parent()
+                .and_then(|p| p.first_child())
+                .and_then(|w| w.downcast::<gtk::Label>().ok())
+            {
+                label.set_text(match i {
+                    3 => "Absolute repository path on the SSH host",
+                    4 => "Repository directory within the SMB share",
+                    5 => "Repository prefix within the S3 bucket",
+                    _ => "Absolute repository folder",
+                });
             }
         }
     };
@@ -1147,12 +1179,12 @@ fn build(app: &gtk::Application) {
     stack.set_vexpand(true);
     main.append(&stack);
     let (overview, body) = page(
-        "Your data, protected",
+        "Protect your data",
         "Encrypted snapshots you can read with standard Restic tools.",
     );
     let coverage = card(
         "Selected user data",
-        "Backs up the folders you select and readable system metadata. Complete system, cross-PC and boot recovery are planned and unqualified.",
+        "Backs up selected folders and readable system metadata. Offline whole-disk capture and recovery use a separate boot environment; physical and cross-PC recovery remain unqualified.",
     );
     body.append(&coverage);
     let health = text("Checking backup service…", "heading");
@@ -1349,7 +1381,7 @@ fn build(app: &gtk::Application) {
         },
     ));
     let u = ui.clone();
-    quick.append(&action(
+    let cancel_button = action(
         "media-playback-stop-symbolic",
         "Cancel active job",
         move || {
@@ -1362,7 +1394,9 @@ fn build(app: &gtk::Application) {
                 );
             }
         },
-    ));
+    );
+    cancel_button.set_sensitive(false);
+    quick.append(&cancel_button);
     let u = ui.clone();
     jobs.connect_clicked(move |_| {
         work(
@@ -1418,6 +1452,13 @@ fn build(app: &gtk::Application) {
         glib::Propagation::Stop
     });
     window.add_controller(keys);
+    nyx_ui::keys::install(
+        &window,
+        nyx_ui::keys::Common {
+            close: true,
+            ..Default::default()
+        },
+    );
     // Polling is lightweight; all bus calls and repository work run off the GTK thread.
     let poll = Rc::new(Cell::new(false));
     let weak = Rc::downgrade(&ui);
@@ -1429,11 +1470,14 @@ fn build(app: &gtk::Application) {
             return glib::ControlFlow::Continue;
         }
         let poll = poll.clone();
+        let cancel_button = cancel_button.clone();
         nyx_core::cmd::background(backup_service::status, move |result| {
             poll.set(false);
+            cancel_button.set_sensitive(false);
             match result {
                 Ok(s) => {
                     if let Ok(h) = serde_json::from_str::<Health>(&s) {
+                        cancel_button.set_sensitive(h.active.is_some());
                         if let Some(stats) = &h.storage {
                             ui.storage.set_text(&format!(
                                 "Repository data: {:.2} GiB · {} blobs (last collected statistics)",
@@ -1544,6 +1588,8 @@ fn build(app: &gtk::Application) {
     };
     refresh(&ui);
     glib::timeout_add_local(std::time::Duration::from_secs(2), update);
+    #[cfg(feature = "ui-review")]
+    ui_review::run(&ui);
     // Keep the UI model alive for the window's lifetime.
     window.connect_close_request(move |_| {
         let _ = &ui;

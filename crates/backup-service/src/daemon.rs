@@ -461,10 +461,10 @@ async fn main() -> anyhow::Result<()> {
     backup_engine::reconcile(&store)?;
     let active = Arc::new(Mutex::new(None));
     let api = Api { store, active };
-    let connection = zbus::connection::Builder::session()?
-        .name(BUS)?
-        .serve_at(OBJECT, api.clone())?
-        .serve_at(OBJECT, Control { api: api.clone() })?
+    let connection = zbus::connection::Builder::session()
+        .name(BUS)
+        .serve_at(OBJECT, api.clone())
+        .serve_at(OBJECT, Control { api: api.clone() })
         .build()
         .await?;
     let socket = backup_service::admin_socket(&api.store);

@@ -15,7 +15,7 @@ backup-engine.workspace = true
 backup-restore.workspace = true
 backup-migrate.workspace = true
 libc.workspace = true
-zbus = { version = "5", default-features = false, features = ["tokio", "blocking-api"] }
+zbus = { version = "6", default-features = false, features = ["tokio-multithread", "proxy", "service"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal", "net", "io-util"] }
 clap = { version = "4", features = ["derive"] }
 rpassword = "7"

@@ -114,3 +114,15 @@ Remaining qualification limits: real commercial cloud/GitHub providers, live SMB
 
 
 Phases 5–6 installation: Backup 0.6.0's four Rust binaries, launcher/icon, local consumers, installed control descriptor and boot-kit resources match their release/source artifacts. A ready refreshed kit at `~/.local/share/nyx-backup/recovery-kits/0.6.0` matches its checksum manifest. Control Center's updated binary matches its release artifact. Only the idle Backup background service was restarted; it reports S3/GitHub/granted-control support and retains `full_system_recovery: false`. Neither GUI was opened/restarted, no panel layout was edited and no schedule/account was enabled.
+
+
+## Completion update: 0.6.1 (2026-11-03)
+
+- Migrated Backup to zbus 6.2.1 and pinned published Core revision `1c309f2912d5eff5e1a3f5eeca8b91cc3c5bcf76`. Backup selects credentials-only nyx-sync; default shared sync behavior is unchanged (20 default-feature and 4 credentials-only shared tests passed).
+- OSV query: **183 locked crates.io packages, zero findings**. The five initial maintenance advisories are absent from Backup's graph without suppression.
+- **24 focused Backup checks passed** (11 engine, 10 restore, 2 service, 1 system). The existing signed-S3/grant/GitHub-stub/provider fixture passed with the new D-Bus runtime. No real account was accessed.
+- `tools/smb-smoke.py`: **passed** against Samba 4.25.0 with private namespace/account state, authenticated connectivity, absent-repository refusal, explicit initialization, initial/incremental encrypted backups, full verification, selective contents/mode restoration, wrong-password/disconnection refusal, and no credential values in ordinary app state. Test-only port injection leaves the production transport unchanged.
+- `tools/ui-smoke.py`: **passed** for dark and light themes. Eight page renders per theme (1600/800 pixels), all six transport field sets, invalid-save refusal, destination/profile Cancel, ecosystem/recovery Escape, Ctrl+Shift+P and Ctrl+Q. Renders were visually inspected; physical input is not injected. The opt-in `ui-review` feature is excluded from installed builds.
+- Corrected stale recovery copy, excessive destination form clutter, missing advertised shared shortcuts and enabled idle cancellation. Release workspace build and formatting/whitespace checks passed.
+
+This closes the local maintenance, targeted GUI and SMB protocol gaps. Real commercial provider/account behavior, live NFS, physical failures and production full-system/cross-PC recovery are not asserted. Ordinary profiles remain selected-data backups; the qualified disk recovery path remains the disposable UEFI VM fixture documented above.

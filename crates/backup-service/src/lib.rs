@@ -3,11 +3,13 @@ use anyhow::Result;
 use backup_core::*;
 pub fn client_call(
     method: &str,
-    body: impl serde::ser::Serialize + zbus::zvariant::DynamicType,
+    body: impl serde::ser::Serialize + zbus::DynamicType,
 ) -> Result<String> {
-    let c = zbus::blocking::Connection::session()?;
-    let p = zbus::blocking::Proxy::new(&c, BUS, OBJECT, BUS)?;
-    Ok(p.call(method, &body)?)
+    zbus::block_on(async {
+        let c = zbus::Connection::session().await?;
+        let p = zbus::Proxy::new(&c, BUS, OBJECT, BUS).await?;
+        Ok(p.call(method, &body).await?)
+    })
 }
 pub fn status() -> Result<String> {
     client_call("Status", ())
