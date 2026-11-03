@@ -47,6 +47,12 @@ fn job(
 }
 pub fn refresh(ui: &Rc<Ui>) {
     clear(&ui.restore);
+    let u = ui.clone();
+    ui.restore.append(&action(
+        "computer-symbolic",
+        "Read current package and hardware inventory",
+        move || migration_ui::inventory(&u),
+    ));
     let c = match Store::default().load() {
         Ok(c) => c,
         Err(_) => return,
@@ -84,6 +90,13 @@ pub fn refresh(ui: &Rc<Ui>) {
             "edit-undo-symbolic",
             "Restore receipts and rollback",
             move || receipts(&u, profile.clone()),
+        ));
+        let u = ui.clone();
+        let profile = p.id.clone();
+        actions.append(&action(
+            "document-send-symbolic",
+            "Migration / Setup bundles",
+            move || migration_ui::bundles(&u, profile.clone()),
         ));
         row.append(&actions);
         ui.restore.append(&row);
@@ -176,6 +189,7 @@ fn browser(ui: &Rc<Ui>, profile: String, snapshot: String, quick: bool) {
     let mode = gtk::DropDown::from_strings(&[
         "Separate folder (default)",
         "Original dotfiles — Quick Restore",
+        "Migration / Setup — map source home to this user",
     ]);
     mode.set_selected(if quick { 1 } else { 0 });
     b.append(&mode);
@@ -222,7 +236,7 @@ fn browser(ui: &Rc<Ui>, profile: String, snapshot: String, quick: bool) {
     );
     b.append(&secrets);
     let closed_apps = gtk::CheckButton::with_label(
-        "I have closed apps using these configuration files (required for Quick Restore)",
+        "I have closed apps using these files (required for original-path restore and migration)",
     );
     closed_apps.set_visible(quick);
     b.append(&closed_apps);
@@ -246,7 +260,7 @@ fn browser(ui: &Rc<Ui>, profile: String, snapshot: String, quick: bool) {
     let closed = browser.closed_apps.clone();
     browser.mode.connect_selected_notify(move |mode| {
         target.set_sensitive(mode.selected() == 0);
-        closed.set_visible(mode.selected() == 1);
+        closed.set_visible(mode.selected() != 0);
     });
     let bb = browser.clone();
     open.connect_clicked(move |_| load_folder(&bb));
@@ -266,7 +280,8 @@ fn browser(ui: &Rc<Ui>, profile: String, snapshot: String, quick: bool) {
     browser.path.connect_activate(move |_| load_folder(&bb));
     let bb = browser.clone();
     d.connect_response(move|d,response|{
-  if response!=gtk::ResponseType::Accept{d.close();return}let paths:Vec<_>=bb.selected.borrow().iter().cloned().collect();if paths.is_empty(){message(&bb.ui,"Select files","Select at least one file or folder from the snapshot.");return}
+  if response!=gtk::ResponseType::Accept{d.close();return}let paths:Vec<_>=bb.selected.borrow().iter().cloned().collect();if paths.is_empty() && bb.mode.selected()!=2 {message(&bb.ui,"Select files","Select at least one file or folder from the snapshot.");return}
+  if bb.mode.selected()==2 {if !bb.closed_apps.is_active(){message(&bb.ui,"Close affected apps","Close apps using the selected files before migration.");return}let policy=match bb.policy.selected(){1=>Policy::KeepBoth,2=>Policy::Replace,_=>Policy::Skip};d.close();migration_ui::prepare(&bb.ui,bb.profile.clone(),bb.snapshot.clone(),paths,None,policy,bb.secrets.is_active());return}
   let mode=if bb.mode.selected()==1{Mode::OriginalDotfiles}else{Mode::Separate};if mode==Mode::OriginalDotfiles && !bb.closed_apps.is_active(){message(&bb.ui,"Close affected apps","Close apps using the selected configuration files, then confirm that they are closed.");return}
   let request=Request::Plan{snapshot:bb.snapshot.clone(),paths,target:if mode==Mode::Separate{Some(PathBuf::from(bb.target.text().as_str()))}else{None},mode,policy:match bb.policy.selected(){1=>Policy::KeepBoth,2=>Policy::Replace,_=>Policy::Skip},include_secrets:bb.secrets.is_active()};let profile=bb.profile.clone();d.close();
   let pp=profile.clone();job(&bb.ui,profile,request,move|ui,value|{if value["state"]!="success"{message(ui,"Restore plan needs attention",&outcome(&value));return}if let Some(id)=value["result"]["plan"].as_str(){review(ui,pp,id.to_string());}});
@@ -335,7 +350,7 @@ fn load_folder(browser: &Rc<Browser>) {
         },
     );
 }
-fn review(ui: &Rc<Ui>, profile: String, id: String) {
+pub fn review(ui: &Rc<Ui>, profile: String, id: String) {
     let next = profile.clone();
     read(
         ui,
@@ -401,6 +416,9 @@ fn review(ui: &Rc<Ui>, profile: String, id: String) {
                                 }
                             ),
                         );
+                        if let Some(adaptation) = &e.adaptation {
+                            row.append(&text(adaptation, "dim-label"));
+                        }
                         if e.before.is_some() && e.status != "pending" {
                             let saved = text(
                                 &format!("Saved original: {}", e.previous.display()),

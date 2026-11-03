@@ -17,6 +17,14 @@ struct Args {
 #[derive(Subcommand)]
 enum Cmd {
     Capabilities,
+    Migration {
+        #[command(subcommand)]
+        action: MigrationCmd,
+    },
+    Setup {
+        #[command(subcommand)]
+        action: SetupCmd,
+    },
     Restore {
         #[command(subcommand)]
         action: RestoreCmd,
@@ -264,6 +272,271 @@ fn restore_command(action: &RestoreCmd) -> Result<serde_json::Value> {
     }
 }
 #[derive(Subcommand)]
+enum MigrationCmd {
+    Capture {
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    Source {
+        profile: String,
+        snapshot: String,
+    },
+    Prepare {
+        profile: String,
+        snapshot: String,
+        #[arg(long = "path")]
+        paths: Vec<String>,
+        #[arg(long)]
+        source_manifest: Option<PathBuf>,
+        #[arg(long,default_value="skip",value_parser=["skip","keep-both","replace"])]
+        policy: String,
+        #[arg(long)]
+        include_secrets: bool,
+        #[arg(long)]
+        no_rewrite_references: bool,
+        #[arg(long)]
+        wait: bool,
+    },
+    Inspect {
+        profile: String,
+        bundle: String,
+    },
+    Bundles {
+        profile: String,
+    },
+    Export {
+        profile: String,
+        bundle: String,
+        path: PathBuf,
+    },
+}
+#[derive(Subcommand)]
+enum SetupCmd {
+    Inspect {
+        bundle: PathBuf,
+    },
+    Prepare {
+        profile: String,
+        snapshot: String,
+        #[arg(long = "path")]
+        paths: Vec<String>,
+        #[arg(long)]
+        source_manifest: Option<PathBuf>,
+        #[arg(long)]
+        bundle: PathBuf,
+        #[arg(long,default_value="skip",value_parser=["skip","keep-both","replace"])]
+        policy: String,
+        #[arg(long)]
+        include_secrets: bool,
+    },
+    Packages {
+        bundle: PathBuf,
+        #[arg(long)]
+        apply: bool,
+        #[arg(long, requires = "apply")]
+        confirm: Option<String>,
+    },
+    Restore {
+        bundle: PathBuf,
+        #[arg(long)]
+        confirm: String,
+        #[arg(long)]
+        wait: bool,
+    },
+}
+fn load_inventory(path: &PathBuf) -> Result<backup_core::migration::Inventory> {
+    ensure!(
+        fs::metadata(path)?.len() <= 8 * 1024 * 1024 && fs::metadata(path)?.is_file(),
+        "Source manifest must be a bounded ordinary JSON file"
+    );
+    let value: backup_core::migration::Inventory = serde_json::from_slice(&fs::read(path)?)?;
+    value.validate()?;
+    Ok(value)
+}
+fn migration_request(
+    snapshot: &str,
+    paths: &[String],
+    source: &Option<PathBuf>,
+    policy: &str,
+    secrets: bool,
+    rewrite: bool,
+) -> Result<backup_migrate::Request> {
+    Ok(backup_migrate::Request::Prepare {
+        snapshot: snapshot.into(),
+        paths: paths.to_vec(),
+        source: source.as_ref().map(load_inventory).transpose()?,
+        policy: match policy {
+            "replace" => backup_restore::Policy::Replace,
+            "keep-both" => backup_restore::Policy::KeepBoth,
+            _ => backup_restore::Policy::Skip,
+        },
+        include_secrets: secrets,
+        rewrite_references: rewrite,
+    })
+}
+fn migration_command(action: &MigrationCmd) -> Result<serde_json::Value> {
+    use backup_migrate::Request;
+    match action {
+        MigrationCmd::Capture { output } => {
+            let inventory = backup_system::migration_inventory::capture();
+            inventory.validate()?;
+            if let Some(path) = output {
+                use std::io::Write;
+                use std::os::unix::fs::OpenOptionsExt;
+                let mut f = fs::OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .mode(0o600)
+                    .open(path)?;
+                f.write_all(&serde_json::to_vec_pretty(&inventory)?)?;
+                f.sync_all()?;
+                Ok(serde_json::json!({"version":1,"exported":path}))
+            } else {
+                Ok(serde_json::to_value(inventory)?)
+            }
+        }
+        MigrationCmd::Source { profile, snapshot } => backup_service::migration_read(
+            profile,
+            Request::Source {
+                snapshot: snapshot.clone(),
+            },
+        ),
+        MigrationCmd::Prepare {
+            profile,
+            snapshot,
+            paths,
+            source_manifest,
+            policy,
+            include_secrets,
+            no_rewrite_references,
+            wait,
+        } => {
+            let id = backup_service::migration_start(
+                profile,
+                migration_request(
+                    snapshot,
+                    paths,
+                    source_manifest,
+                    policy,
+                    *include_secrets,
+                    !*no_rewrite_references,
+                )?,
+            )?;
+            if *wait {
+                backup_service::wait_job(&id)
+            } else {
+                Ok(serde_json::json!({"job":id}))
+            }
+        }
+        MigrationCmd::Inspect { profile, bundle } => backup_service::migration_read(
+            profile,
+            Request::Inspect {
+                bundle: bundle.clone(),
+            },
+        ),
+        MigrationCmd::Bundles { profile } => {
+            backup_service::migration_read(profile, Request::Bundles)
+        }
+        MigrationCmd::Export {
+            profile,
+            bundle,
+            path,
+        } => backup_service::migration_read(
+            profile,
+            Request::Export {
+                bundle: bundle.clone(),
+                path: path.clone(),
+            },
+        ),
+    }
+}
+fn setup_command(action: &SetupCmd) -> Result<serde_json::Value> {
+    match action {
+        SetupCmd::Inspect { bundle } => {
+            backup_migrate::setup_preview(&backup_migrate::import_bundle(bundle)?)
+        }
+        SetupCmd::Packages {
+            bundle,
+            apply,
+            confirm,
+        } => {
+            let bundle = backup_migrate::import_bundle(bundle)?;
+            if *apply {
+                backup_migrate::setup_install(
+                    &bundle,
+                    confirm
+                        .as_deref()
+                        .context("Supply --confirm with the exact Setup bundle ID")?,
+                )?;
+                Ok(
+                    serde_json::json!({"version":1,"bundle":bundle.id,"ok":true,"message":"Package handoff finished; configuration restore remains separate"}),
+                )
+            } else {
+                backup_migrate::setup_preview(&bundle)
+            }
+        }
+        SetupCmd::Restore {
+            bundle,
+            confirm,
+            wait,
+        } => {
+            let bundle = backup_migrate::import_bundle(bundle)?;
+            ensure!(*confirm == bundle.id, "Confirm the exact Setup bundle ID");
+            let _ = backup_migrate::setup_preview(&bundle)?;
+            let plan = bundle
+                .restore_plan
+                .context("This bundle has no staged configuration plan")?;
+            let id = backup_service::restore_start(
+                &bundle.profile,
+                backup_restore::Request::Apply {
+                    plan: plan.clone(),
+                    confirmation: plan,
+                },
+            )?;
+            if *wait {
+                backup_service::wait_job(&id)
+            } else {
+                Ok(serde_json::json!({"job":id}))
+            }
+        }
+        SetupCmd::Prepare {
+            profile,
+            snapshot,
+            paths,
+            source_manifest,
+            bundle,
+            policy,
+            include_secrets,
+        } => {
+            let id = backup_service::migration_start(
+                profile,
+                migration_request(
+                    snapshot,
+                    paths,
+                    source_manifest,
+                    policy,
+                    *include_secrets,
+                    true,
+                )?,
+            )?;
+            let job = backup_service::wait_job(&id)?;
+            if job["state"] != "success" {
+                return Ok(job);
+            }
+            let id = job["result"]["bundle"]
+                .as_str()
+                .context("Missing Setup bundle ID")?;
+            backup_service::migration_read(
+                profile,
+                backup_migrate::Request::Export {
+                    bundle: id.into(),
+                    path: bundle.clone(),
+                },
+            )
+        }
+    }
+}
+#[derive(Subcommand)]
 enum ConfigCmd {
     Show,
     Import { path: PathBuf },
@@ -364,6 +637,8 @@ fn run(a: &Args) -> Result<serde_json::Value> {
     let parse = |s: String| -> Result<serde_json::Value> { Ok(serde_json::from_str(&s)?) };
     match &a.command {
         Cmd::Capabilities => Ok(backup_service::capabilities()),
+        Cmd::Migration { action } => migration_command(action),
+        Cmd::Setup { action } => setup_command(action),
         Cmd::Restore { action } => restore_command(action),
         Cmd::Status => parse(backup_service::status()?),
         Cmd::Jobs => parse(backup_service::client_call("Jobs", ())?),

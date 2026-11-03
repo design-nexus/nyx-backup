@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["apps/backup", "crates/*"]
-default-members = ["crates/backup-core", "crates/backup-system", "crates/backup-engine", "crates/backup-service", "crates/backup-restore"]
+default-members = ["crates/backup-core", "crates/backup-system", "crates/backup-engine", "crates/backup-service", "crates/backup-restore", "crates/backup-migrate"]
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/design-nexus/nyx-backup"
@@ -22,6 +22,7 @@ backup-system = { path = "crates/backup-system" }
 backup-engine = { path = "crates/backup-engine" }
 backup-service = { path = "crates/backup-service" }
 backup-restore = { path = "crates/backup-restore" }
+backup-migrate = { path = "crates/backup-migrate" }
 [profile.release]
 lto = "thin"
 strip = true

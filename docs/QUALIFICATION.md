@@ -8,7 +8,7 @@ This records actual evidence separately from implemented source. No real user so
 - GUI opening/interaction and rendered visual review are not performed. Installation must not open or restart the app.
 - SFTP is qualified against a disposable loopback SFTP-only OpenSSH endpoint. SMB and NFS endpoints remain unverified. Native Rclone encrypted-config interoperability is tested independently from connectivity.
 - Physical drive removal, service crashes during filesystem sync, host reboot/power loss and large-data performance remain unverified.
-- Complete-system, hardware migration and boot recovery are planned, with no qualifying VM recovery evidence.
+- Complete-system and boot recovery remain planned. Phase 3 implements user migration planning; physical cross-machine recovery has no qualifying evidence.
 
 The results below record the completed checks and their limits.
 
@@ -63,3 +63,18 @@ Delivered as version 0.2.0: snapshot browsing, selected file/folder restoration,
 - Locked workspace release build, formatting, fixture syntax and whitespace checks: **passed**. Headless restoration is a separate domain crate. Existing GTK Dialog deprecation and upstream future-compatibility warnings remain.
 
 Coverage is explicit: contents, symlinks, ordinary mode bits and modification times. Ownership, ACLs, xattrs and hard-link topology are not applied. GUI visual/interaction review, SMB/NFS restore endpoints, physical failure modes and host power-loss recovery remain unverified. The GUI is not opened or restarted during delivery. No real user file sources or live NAS credentials were used.
+
+
+## Phase 3: user migration and Setup (2026-11-02)
+
+Delivered as version 0.3.0. New encrypted snapshots include versioned package/hardware inventories. The app and private CLI/service prepare reviewed user-root mapping, hardware/file holds, bounded reference rewriting, target monitor defaults, package decisions and private Setup exports. The installed `nyx-backup-setup` consumer supports preview and separately confirmed package/file application. The legacy generated setup repository and `omarchy-backup` are unchanged.
+
+- Focused checks: **25 passed** (11 engine, 10 restore, 4 migration). Cover existing restore guards plus target-root mapping, hardware-file holds, Lua/legacy monitor preparation, literal reference boundaries, package hardware/foreign/dependency/platform/repository decisions, invalid package arguments and handoff digest changes.
+- `python3 tools/migration-smoke.py`: **passed** with native Restic, isolated home/config/state, private session/keyring and synthetic old-home/hardware inventory. Proved inventory in encrypted snapshot metadata; legitimate empty foreign-package queries; marked external-manifest provenance; staging without target changes; different-home mapping; automatic target Lua monitor syntax (`luac -p`); preserved embedded URLs; held hardware/Backup files; correct package decisions; private export; Setup prepare/inspect; confirmation refusal; exact fixed installer arguments; forged/damaged bundle refusal; confirmed file apply and rollback; integration D-Bus rejection. **Installer execution used a recording sudo stub; no host package installation or repository refresh occurred.**
+- `python3 tools/restore-smoke.py`: **passed** as a targeted regression for shared restore planning/application, including existing confirmation, cancellation, conflict and rollback guards.
+- Exported fixture JSON matches the published schema's field structure, types and enum values. Runtime additionally verifies digest, target binding and actual current package eligibility; the digest is not a signature.
+- Locked workspace release build and formatting/whitespace checks passed. GTK deprecation and upstream future-compatibility warnings remain. GUI was not launched or visually reviewed.
+
+Read-only host inventory was inspected, but no real user sources or live NAS credentials were selected. This proves synthetic migration mechanics, not physical different-machine compatibility, display behavior, real package installation, full-system or boot recovery. Flatpaks, foreign builds and recognized hardware packages require manual review; local binaries/language-manager inventory is missing coverage. Power-loss, SMB/NFS endpoints and GUI interaction remain unverified.
+
+Installation: all three Rust binaries match the release artifacts; the Setup consumer and contract match their sources. Launcher/icon and activation resources are installed. The idle background service was restarted and returned `local_migration: true` and `setup_contract: nyx-backup-setup/v1`. No schedule was enabled and the GUI was not opened or restarted.

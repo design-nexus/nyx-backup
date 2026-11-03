@@ -1,3 +1,4 @@
+mod migration_ui;
 mod restore_ui;
 use backup_core::*;
 use gtk::{gio, glib, prelude::*};

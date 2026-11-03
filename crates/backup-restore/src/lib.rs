@@ -28,12 +28,202 @@ pub enum Policy {
     KeepBoth,
     Replace,
 }
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HomeMapping {
+    pub source_home: PathBuf,
+    pub source_config: PathBuf,
+    pub target_home: PathBuf,
+    pub target_config: PathBuf,
+    pub monitor_format: String,
+    pub rewrite_references: bool,
+}
+impl HomeMapping {
+    pub fn validate(&self) -> Result<()> {
+        for path in [
+            &self.source_home,
+            &self.source_config,
+            &self.target_home,
+            &self.target_config,
+        ] {
+            fs_safe::clean_absolute(path)?;
+            ensure!(
+                path != Path::new("/"),
+                "Migration roots cannot be filesystem root"
+            );
+        }
+        ensure!(
+            self.target_home == fs_safe::resolved(&nyx_core::paths::home())?
+                && self.target_config == fs_safe::resolved(&nyx_core::paths::config_home())?,
+            "Migration targets must be the current user's home/configuration"
+        );
+        ensure!(
+            ["lua", "conf", "unknown"].contains(&self.monitor_format.as_str()),
+            "Unknown monitor syntax"
+        );
+        Ok(())
+    }
+    pub fn target(&self, source: &Path) -> Result<PathBuf> {
+        fs_safe::clean_absolute(source)?;
+        ensure!(
+            !backup_engine::contains_recognized_store(source),
+            "Migrate a database/VM export separately; do not replace a live store"
+        );
+        if let Ok(relative) = source.strip_prefix(&self.source_config) {
+            if ["hypr/monitors.lua", "hypr/monitors.conf"]
+                .iter()
+                .any(|p| relative == Path::new(p))
+            {
+                ensure!(
+                    self.monitor_format != "unknown",
+                    "Target Hyprland syntax is unknown; monitor files require manual review"
+                );
+                return Ok(self
+                    .target_config
+                    .join(format!("hypr/monitors.{}", self.monitor_format)));
+            }
+            ensure!(
+                !hardware_file(relative),
+                "Hardware-sensitive configuration is held for manual review"
+            );
+            return Ok(self.target_config.join(relative));
+        }
+        if let Ok(relative) = source.strip_prefix(&self.source_home) {
+            ensure!(
+                !relative.starts_with(".local/state/nyx-backup") && !relative.starts_with(".cache"),
+                "Backup state and caches are not migration inputs"
+            );
+            return Ok(self.target_home.join(relative));
+        }
+        anyhow::bail!("Migration only maps selected source home/configuration files")
+    }
+}
+pub fn hardware_file(relative: &Path) -> bool {
+    let value = relative.to_string_lossy();
+    [
+        "hypr/hyprland.lua",
+        "hypr/hyprland.conf",
+        "hypr/envs.conf",
+        "hypr/env.lua",
+        "hypr/envs.lua",
+        "hypr/input.lua",
+        "hypr/input.conf",
+        "hypr/render.conf",
+        "hypr/variables.conf",
+        "hypr/monitor-workspaces.lua",
+    ]
+    .contains(&value.as_ref())
+        || value.starts_with("hypr/nvidia")
+        || value.starts_with("environment.d/")
+        || value.starts_with("systemd/")
+}
+fn reference_path(path: &Path) -> bool {
+    path.as_os_str()
+        .as_encoded_bytes()
+        .iter()
+        .all(|b| b.is_ascii_alphanumeric() || b"/_.-".contains(b))
+}
+fn replace_path_prefix(text: &str, from: &Path, to: &Path) -> String {
+    let needle = format!("{}/", from.display());
+    let replacement = format!("{}/", to.display());
+    let mut result = String::new();
+    let mut offset = 0;
+    for (index, _) in text.match_indices(&needle) {
+        let allowed = text[..index]
+            .chars()
+            .next_back()
+            .is_none_or(|c| c.is_whitespace() || "\"'=([{,:".contains(c));
+        if allowed {
+            result.push_str(&text[offset..index]);
+            result.push_str(&replacement);
+            offset = index + needle.len();
+        }
+    }
+    result.push_str(&text[offset..]);
+    result
+}
+fn adapt_stage(
+    store: &Store,
+    id: &str,
+    source: &str,
+    mapping: &HomeMapping,
+) -> Result<Option<String>> {
+    let path = stage_path(store, id, source)?;
+    let relative = Path::new(source).strip_prefix(&mapping.source_config).ok();
+    if relative.is_some_and(|p| {
+        p == Path::new("hypr/monitors.lua") || p == Path::new("hypr/monitors.conf")
+    }) {
+        let data = if mapping.monitor_format == "lua" {
+            r#"-- Prepared by Nyx Backup: use this machine's preferred display mode.
+hl.monitor({ output = "", mode = "preferred", position = "auto", scale = "auto" })
+"#
+        } else {
+            r#"# Prepared by Nyx Backup: use this machine's preferred display mode.
+monitor = , preferred, auto, 1
+"#
+        };
+        atomic(&path, data)?;
+        return Ok(Some("Source display assignments replaced with target-format automatic monitor defaults; review before applying.".into()));
+    }
+    if !mapping.rewrite_references {
+        return Ok(None);
+    }
+    let metadata = fs::symlink_metadata(&path)?;
+    if !metadata.is_file() || metadata.len() > TEXT_LIMIT {
+        return Ok(None);
+    }
+    let Ok(mut data) = fs::read_to_string(&path) else {
+        return Ok(None);
+    };
+    let recognizable = path.extension().is_some_and(|p| {
+        [
+            "json", "toml", "ini", "conf", "yaml", "yml", "lua", "desktop", "sh",
+        ]
+        .iter()
+        .any(|s| p == *s)
+    }) || Path::new(source).file_name().is_some_and(|n| {
+        [".bashrc", ".bash_profile", ".zshrc", ".profile"]
+            .iter()
+            .any(|s| n == *s)
+    });
+    if !recognizable
+        || ![
+            &mapping.source_home,
+            &mapping.source_config,
+            &mapping.target_home,
+            &mapping.target_config,
+        ]
+        .iter()
+        .all(|p| reference_path(p))
+    {
+        return Ok(None);
+    }
+    let original = data.clone();
+    for (from, to) in [
+        (&mapping.source_config, &mapping.target_config),
+        (&mapping.source_home, &mapping.target_home),
+    ] {
+        if from != to {
+            data = replace_path_prefix(&data, from, to);
+        }
+    }
+    if data == original {
+        return Ok(None);
+    }
+    if path.extension().is_some_and(|x| x == "json") {
+        let _: serde_json::Value = serde_json::from_str(&data)
+            .context("Rewritten JSON is invalid; restore it separately and merge manually")?;
+    }
+    atomic(&path, data)?;
+    Ok(Some("Literal source home/configuration path prefixes rewritten in a small recognized UTF-8 configuration file; application compatibility still requires review.".into()))
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
     #[default]
     Separate,
     OriginalDotfiles,
+    MigratedUserData(HomeMapping),
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
@@ -103,6 +293,9 @@ impl Request {
                 for p in paths {
                     archive_path(p)?;
                 }
+                if let Mode::MigratedUserData(mapping) = mode {
+                    mapping.validate()?;
+                }
                 if mode == &Mode::Separate {
                     fs_safe::clean_absolute(
                         target
@@ -156,6 +349,8 @@ pub struct Entry {
     pub incoming: PathBuf,
     pub undone: PathBuf,
     pub message: String,
+    #[serde(default)]
+    pub adaptation: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Plan {
@@ -433,6 +628,7 @@ fn mapped_target(
     let path = match mode {
         Mode::Separate => root.join(source.strip_prefix("/")?),
         Mode::OriginalDotfiles => quick_target(&source, include_secrets)?,
+        Mode::MigratedUserData(mapping) => mapping.target(&source)?,
     };
     protected(store, c, &path)?;
     Ok(path)
@@ -474,6 +670,10 @@ fn make_plan(
     let root = match mode {
         Mode::Separate => fs_safe::resolved(target.as_ref().context("Choose a target folder")?)?,
         Mode::OriginalDotfiles => fs_safe::resolved(&nyx_core::paths::home())?,
+        Mode::MigratedUserData(mapping) => {
+            mapping.validate()?;
+            mapping.target_home.clone()
+        }
     };
     ensure!(
         mode != &Mode::Separate || root != Path::new("/"),
@@ -527,6 +727,7 @@ fn make_plan(
     capture(cmd, cancel)?;
     let mut plan=Plan{version:1,id,profile:p.id.clone(),snapshot:snapshot.clone(),created:now(),mode:mode.clone(),policy:policy.clone(),root,state:"ready".into(),entries:vec![],empty_directories:vec![],created_directories:vec![],messages:vec!["Files are staged in private local storage. Applying restores file contents, symlinks, modes and modification times. Ownership, ACLs and extended attributes are not applied. Close apps using files before replacing their configuration.".into()]};
     let mut selected_paths = std::collections::HashSet::new();
+    let mut selected_targets = std::collections::HashSet::new();
     for node in selected {
         check(cancel)?;
         let source = stage_path(store, &plan.id, &node.path)?;
@@ -547,8 +748,13 @@ fn make_plan(
             selected_paths.insert(node.path.clone()),
             "Snapshot returned duplicate paths"
         );
+        let adaptation = if let Mode::MigratedUserData(mapping) = mode {
+            adapt_stage(store, &plan.id, &node.path, mapping)?
+        } else {
+            None
+        };
         let after = fs_safe::fingerprint(&source)?.context("A selected staged file is missing")?;
-        if mode == &Mode::OriginalDotfiles && after.kind == "file" {
+        if !matches!(mode, Mode::Separate) && after.kind == "file" {
             let mut magic = [0u8; 16];
             let mut file = Parent::open(&source, false, &mut vec![])?.read_file()?;
             ensure!(
@@ -583,6 +789,10 @@ fn make_plan(
         } else {
             "create"
         };
+        ensure!(
+            selected_targets.insert(target.clone()),
+            "Selected files map to the same destination; select one version"
+        );
         let parent = target.parent().context("Missing parent")?;
         let index = plan.entries.len();
         plan.entries.push(Entry {
@@ -596,6 +806,7 @@ fn make_plan(
             incoming: parent.join(format!(".nyx-restore-{}-{index}.incoming", plan.id)),
             undone: parent.join(format!(".nyx-restore-{}-{index}.undone", plan.id)),
             message: String::new(),
+            adaptation,
         });
     }
     ensure!(
@@ -609,19 +820,50 @@ fn make_plan(
     save(store, &plan)?;
     Ok(plan)
 }
+fn policy_target(mapped: &Path, target: &Path, plan: &Plan) -> bool {
+    if mapped == target {
+        return true;
+    }
+    if plan.policy != Policy::KeepBoth {
+        return false;
+    }
+    let Some(name) = mapped.file_name() else {
+        return false;
+    };
+    let mut name = name.to_os_string();
+    name.push(format!(
+        ".restored-{}-{}",
+        &plan.snapshot[..8],
+        &plan.id[..8]
+    ));
+    mapped.with_file_name(name) == target
+}
 fn validate_plan(store: &Store, c: &Config, plan: &Plan) -> Result<()> {
     fs_safe::clean_absolute(&plan.root)?;
+    if let Mode::MigratedUserData(mapping) = &plan.mode {
+        mapping.validate()?;
+    }
     for entry in &plan.entries {
         protected(store, c, &entry.target)?;
-        match plan.mode {
+        match &plan.mode {
             Mode::Separate => ensure!(
                 entry.target.starts_with(&plan.root) && entry.target != plan.root,
                 "Restore entry escapes its selected root"
             ),
-            Mode::OriginalDotfiles => ensure!(
-                quick_target(&archive_path(&entry.source)?, true)? == entry.target,
-                "Original dotfile target changed"
-            ),
+            Mode::OriginalDotfiles => {
+                let mapped = quick_target(&archive_path(&entry.source)?, true)?;
+                ensure!(
+                    policy_target(&mapped, &entry.target, plan),
+                    "Original dotfile target changed"
+                );
+            }
+            Mode::MigratedUserData(mapping) => {
+                let mapped = mapping.target(&archive_path(&entry.source)?)?;
+                ensure!(
+                    policy_target(&mapped, &entry.target, plan),
+                    "Migration target changed"
+                );
+            }
         }
         let parent = entry.target.parent().context("Missing target parent")?;
         for reserved in [&entry.previous, &entry.incoming, &entry.undone] {
@@ -990,7 +1232,14 @@ pub fn read(
             let diff = similar::TextDiff::from_lines(&current, &snapshot)
                 .unified_diff()
                 .context_radius(3)
-                .header("current", "snapshot")
+                .header(
+                    "current",
+                    if entry.adaptation.is_some() {
+                        "prepared"
+                    } else {
+                        "snapshot"
+                    },
+                )
                 .to_string();
             ensure!(
                 diff.len() <= 4 * 1024 * 1024,
@@ -1062,6 +1311,7 @@ mod tests {
             incoming: parent.join(format!(".nyx-restore-{id}-0.incoming")),
             undone: parent.join(format!(".nyx-restore-{id}-0.undone")),
             message: String::new(),
+            adaptation: None,
         };
         let plan = Plan {
             version: 1,
@@ -1281,4 +1531,163 @@ mod tests {
         );
         assert!(snapshot_id("latest").is_err());
     }
+}
+
+/// Application-owned migration uses these fixed operations while retaining RepoLock.
+pub fn snapshot_metadata(
+    _lock: &RepoLock,
+    store: &Store,
+    c: &Config,
+    p: &Profile,
+    snapshot: &str,
+    cancel: &AtomicBool,
+) -> Result<serde_json::Value> {
+    owned_snapshot(store, c, p, snapshot, cancel)?;
+    let mut cmd = command(store, c, p)?;
+    cmd.args(["cat", "snapshot", snapshot]);
+    let metadata: serde_json::Value = serde_json::from_slice(&capture(cmd, cancel)?)?;
+    let suffix = format!("/nyx-backup/metadata/{}/system.json", p.id);
+    let path = metadata["paths"]
+        .as_array()
+        .and_then(|paths| {
+            paths
+                .iter()
+                .filter_map(|p| p.as_str())
+                .find(|p| p.ends_with(&suffix))
+        })
+        .context("Snapshot has no Backup system metadata")?;
+    let mut cmd = command(store, c, p)?;
+    cmd.args(["dump", snapshot, path]);
+    let bytes = capture(cmd, cancel)?;
+    ensure!(
+        bytes.len() <= 8 * 1024 * 1024,
+        "Snapshot metadata is too large"
+    );
+    Ok(serde_json::from_slice(&bytes)?)
+}
+pub fn snapshot_selection(
+    _lock: &RepoLock,
+    store: &Store,
+    c: &Config,
+    p: &Profile,
+    snapshot: &str,
+    paths: &[String],
+    cancel: &AtomicBool,
+) -> Result<Vec<Node>> {
+    owned_snapshot(store, c, p, snapshot, cancel)?;
+    let nodes = nodes(store, c, p, snapshot, paths, true, cancel)?;
+    Ok(nodes
+        .into_iter()
+        .filter(|n| related(Path::new(&n.path), paths))
+        .collect())
+}
+pub fn prepare_migration(
+    _lock: &RepoLock,
+    store: &Store,
+    c: &Config,
+    p: &Profile,
+    request: &Request,
+    cancel: &AtomicBool,
+    job: &mut Job,
+    changed: &mut impl FnMut(&Job),
+) -> Result<Plan> {
+    request.validate()?;
+    ensure!(
+        matches!(
+            request,
+            Request::Plan {
+                mode: Mode::MigratedUserData(_),
+                ..
+            }
+        ),
+        "Expected mapped migration preparation"
+    );
+    make_plan(store, c, p, request, cancel, job, changed)
+}
+pub fn append_plan_messages(
+    store: &Store,
+    profile: &str,
+    id: &str,
+    messages: Vec<String>,
+) -> Result<()> {
+    let mut plan = load(store, profile, id)?;
+    plan.messages.extend(messages);
+    save(store, &plan)
+}
+
+pub fn validate_snapshot(
+    _lock: &RepoLock,
+    store: &Store,
+    c: &Config,
+    p: &Profile,
+    snapshot: &str,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    owned_snapshot(store, c, p, snapshot, cancel)
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+    fn mapping() -> HomeMapping {
+        HomeMapping {
+            source_home: "/old/home".into(),
+            source_config: "/old/home/.config".into(),
+            target_home: "/new/home".into(),
+            target_config: "/new/home/.config".into(),
+            monitor_format: "lua".into(),
+            rewrite_references: true,
+        }
+    }
+    #[test]
+    fn mapped_targets_are_bounded_and_hardware_files_held() {
+        let m = mapping();
+        assert_eq!(
+            m.target(Path::new("/old/home/Documents/file.txt")).unwrap(),
+            PathBuf::from("/new/home/Documents/file.txt")
+        );
+        assert_eq!(
+            m.target(Path::new("/old/home/.config/hypr/monitors.conf"))
+                .unwrap(),
+            PathBuf::from("/new/home/.config/hypr/monitors.lua")
+        );
+        assert!(m.target(Path::new("/etc/fstab")).is_err());
+        assert!(
+            m.target(Path::new("/old/home/.config/hypr/envs.conf"))
+                .is_err()
+        );
+        assert!(m.target(Path::new("/old/home/data.sqlite")).is_err());
+    }
+    #[test]
+    fn literal_prefix_rewrite_avoids_urls_and_other_paths() {
+        let text = "local='/old/home/Documents' url='https://host/old/home/Documents' other='/backup/old/home/Documents'";
+        assert_eq!(
+            replace_path_prefix(text, Path::new("/old/home"), Path::new("/new/home")),
+            "local='/new/home/Documents' url='https://host/old/home/Documents' other='/backup/old/home/Documents'"
+        );
+    }
+    #[test]
+    fn monitor_adaptation_never_executes_or_copies_source_code() {
+        let root = std::env::temp_dir().join(format!("nyx-migration-unit-{}", id()));
+        let store = Store {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let source = "/old/home/.config/hypr/monitors.conf";
+        let path = stage_path(&store, "fixture", source).unwrap();
+        private_dir(path.parent().unwrap()).unwrap();
+        fs::write(&path, "SOURCE-DP-9; os.execute('untrusted command')").unwrap();
+        let result = adapt_stage(&store, "fixture", source, &mapping()).unwrap();
+        assert!(result.is_some());
+        let output = fs::read_to_string(&path).unwrap();
+        assert!(output.contains("hl.monitor({ output = \"\""));
+        assert!(output.contains('\n'));
+        assert!(!output.contains("SOURCE-DP") && !output.contains("os.execute"));
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+pub fn migration_target_allowed(store: &Store, c: &Config, path: &Path) -> Result<()> {
+    protected(store, c, path)
 }

@@ -7,15 +7,18 @@ Rust 2024 workspace with independent domain crates:
 - `backup-engine`: a common selection walker for preview/execution, Restic argument arrays and JSON progress, cancellation, app worker lock, exit-state mapping and reconciliation.
 - `backup-service`: versioned session D-Bus API, approved-profile execution, CLI administration and a systemd-owned daemon.
 - `backup-restore`: profile-owned snapshot browsing, private staging/verification, exact plans, content diffs, descriptor-relative file replacement, conflict policies and rollback journals.
+- `backup-migrate`: versioned package/hardware inventory handoff, target mapping, hardware/package decisions and a target-bound Setup consumer; reuses reviewed restore staging and rollback.
 - `apps/backup`: GTK4 0.11, pinned Nyx Core/Design 2.0 widgets, theme engine and icon system. Blocking work stays off the GTK thread.
 
-The restore crate is now delivered in Phase 2. A hardware crate remains deferred until its functionality works. No Settings engine, Core Control destructive API, `omarchy-backup` replacement, global watcher or setup integration is introduced.
+The restore and migration crates are delivered in Phases 2 and 3. No Settings engine, Core Control destructive API, `omarchy-backup` replacement or global watcher is introduced. Setup is an explicit installed consumer; see MIGRATION.md.
 
 Configuration: `$XDG_CONFIG_HOME/nyx-backup/config.toml`; encrypted per-destination SMB files in `rclone/`; GUI theme preferences in `appearance.json`. State: `$XDG_STATE_HOME/nyx-backup/jobs/ID.json`, metadata under `metadata/PROFILE/system.json`, and a process-held `worker.lock`. Cache: `$XDG_CACHE_HOME/nyx-backup/restic`. Parent app directories are 0700; ordinary app files are 0600. Atomic writes reuse `nyx-core`'s synced rename implementation.
 
 One application lock serializes repository operations across CLI and daemon processes. Restic's native repository locking remains enabled, protecting against other tools and hosts. Repository operations publish running/progress/terminal state. Startup reconciles stale running jobs only after acquiring the application lock; it never clears repository locks. The systemd control group owns descendants, and cancellation terminates Restic's process group (including SSH/Rclone), escalating only when needed.
 
-Metadata includes readable OS release, kernel, filesystem/mount descriptions, boot command line and Omarchy version. Missing commands/access are recorded as missing metadata coverage. This is an inventory, not recovery qualification. Selected files are stored at their native absolute paths inside snapshots; the metadata has a stable profile-specific path. No source root is silently replaced with the whole home directory.
+Private migration bundles are retained in `migrations/ID.json`; exports are explicit create-new mode 0600. They reference existing private restore plans rather than embedding user data or secrets. Package installation is a separately confirmed local CLI action through the target package manager, never a daemon/integration method.
+
+Metadata includes versioned package/hardware inventories plus readable OS release, kernel, filesystem/mount descriptions, boot command line and Omarchy version. Missing commands/access are recorded as missing metadata coverage. This is an inventory, not recovery qualification. Selected files are stored at their native absolute paths inside snapshots; the metadata has a stable profile-specific path. No source root is silently replaced with the whole home directory.
 
 ## Session D-Bus v1
 

@@ -1,6 +1,6 @@
 # Nyx Backup
 
-A Rust/GTK4 desktop app for encrypted Restic backups of **selected user data and readable system metadata**. Standard Restic tools can read its repositories. The app is unprivileged and makes no complete-system, boot-recovery or cross-PC recovery claim. Phase 2 adds staged selective restoration, dotfile diffs, conflict handling and rollback.
+A Rust/GTK4 desktop app for encrypted Restic backups of **selected user data and readable system metadata**. Standard Restic tools can read its repositories. The app is unprivileged and makes no complete-system, boot-recovery or cross-PC recovery claim. Phase 2 adds staged selective restoration, dotfile diffs, conflict handling and rollback. Phase 3 adds package inventories, reviewed user/hardware migration planning and a versioned Setup consumer.
 
 The interface has Overview, Backups, Restore and Settings. Backup and repository-administration jobs belong to an on-demand systemd user service, so closing the window does not stop them. Scheduling and retention deletion require explicit action.
 
@@ -13,13 +13,13 @@ cargo build --release --locked --workspace
 ./install.sh --skip-build
 ```
 
-Installation includes `nyx-backup`, `nyx-backupctl`, `nyx-backupd` in `~/.local/bin`, the launcher/icon in XDG data directories, D-Bus activation, and the user service. It does not launch the GUI, enable timers or restart an existing instance. `./install.sh` also builds. Shared dependencies use immutable published revisions.
+Installation includes `nyx-backup`, `nyx-backupctl`, `nyx-backupd` and the `nyx-backup-setup` consumer in `~/.local/bin`, the launcher/icon in XDG data directories, D-Bus activation, and the user service. It does not launch the GUI, enable timers or restart an existing instance. `./install.sh` also builds. Shared dependencies use immutable published revisions.
 
-Headless libraries and CLI/service build with `cargo build --locked` (the default workspace members exclude GTK). The GUI lives in `apps/backup`; domain crates live in `crates/backup-{core,system,engine,service}`.
+Headless libraries and CLI/service build with `cargo build --locked` (the default workspace members exclude GTK). The GUI lives in `apps/backup`; domain crates live in `crates/backup-{core,system,engine,restore,migrate,service}`.
 
 ```sh
 cargo fmt --all --check
-cargo test --locked -p backup-engine -p backup-restore
+cargo test --locked -p backup-engine -p backup-restore -p backup-migrate
 # Disposable private-bus/keyring integration test; never selects real user data:
 python3 tools/smoke.py
 # Private-bus activation and a disposable transient user timer:
@@ -91,5 +91,7 @@ For SMB, use the encrypted Rclone config and its Secret Service password command
 Cancellation also interrupts file-source preparation before Restic starts. A cancelled or interrupted backup can be started again incrementally. This reuses stored repository content; it does not resume at an exact byte offset. Backup never removes uncertain Restic locks. Inspect the repository and confirm no worker is using it before using native Restic maintenance tools.
 
 The app restores contents, symlinks, modes and modification times; ownership, ACLs, extended attributes and hard-link topology are not applied. Private staging and recovery copies are retained. Close apps before replacing their configuration.
+
+For reviewed migration and Setup handoff, see [Phase 3 workflow](docs/MIGRATION.md).
 
 See [architecture/API](docs/ARCHITECTURE.md), [security](docs/SECURITY.md), [capabilities and roadmap](docs/ROADMAP.md), and [Restic recovery documentation](https://restic.readthedocs.io/en/stable/050_restore.html).

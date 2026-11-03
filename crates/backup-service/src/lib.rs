@@ -16,7 +16,7 @@ pub fn start(profile: &str, operation: &str) -> Result<String> {
     client_call("Start", (profile, operation))
 }
 pub fn capabilities() -> serde_json::Value {
-    serde_json::json!({"version":1,"coverage":"selected_user_data_and_readable_metadata","operations":["preview","backup","history","stats","verify","verify-full","cancel"],"restore":false,"local_restore":true,"local_restore_operations":["snapshots","browse","plan","diff","apply","rollback"],"full_system_recovery":false,"automatic_retention":false})
+    serde_json::json!({"version":1,"coverage":"selected_user_data_and_readable_metadata","operations":["preview","backup","history","stats","verify","verify-full","cancel"],"restore":false,"local_restore":true,"local_migration":true,"setup_contract":"nyx-backup-setup/v1","local_restore_operations":["snapshots","browse","plan","diff","apply","rollback"],"full_system_recovery":false,"automatic_retention":false})
 }
 
 /// Private local administration requests. These operations are never D-Bus methods.
@@ -30,6 +30,8 @@ pub struct AdminRequest {
     pub configuration: std::path::PathBuf,
     #[serde(default)]
     pub restore: Option<backup_restore::Request>,
+    #[serde(default)]
+    pub migration: Option<backup_migrate::Request>,
 }
 impl AdminRequest {
     pub fn validate(&self) -> Result<()> {
@@ -39,6 +41,18 @@ impl AdminRequest {
             self.configuration.is_absolute(),
             "Administration requires an absolute configuration path"
         );
+        anyhow::ensure!(
+            !(self.restore.is_some() && self.migration.is_some()),
+            "Choose a single local operation payload"
+        );
+        if let Some(migration) = &self.migration {
+            migration.validate()?;
+            anyhow::ensure!(
+                self.operation == migration.operation(),
+                "Migration operation does not match payload"
+            );
+            return Ok(());
+        }
         if let Some(restore) = &self.restore {
             restore.validate()?;
             anyhow::ensure!(
@@ -89,6 +103,7 @@ pub fn admin_start(
         confirm_profile: confirm_profile.map(Into::into),
         configuration: configuration_file(&Store::default()),
         restore: None,
+        migration: None,
     };
     let response = local_request(request)?;
     let id = response["job"]
@@ -152,6 +167,7 @@ pub fn restore_read(profile: &str, restore: backup_restore::Request) -> Result<s
         confirm_profile: None,
         configuration: configuration_file(&Store::default()),
         restore: Some(restore),
+        migration: None,
     })?;
     Ok(response["result"].clone())
 }
@@ -164,6 +180,7 @@ pub fn restore_start(profile: &str, restore: backup_restore::Request) -> Result<
         confirm_profile: None,
         configuration: configuration_file(&Store::default()),
         restore: Some(restore),
+        migration: None,
     })?;
     let id = response["job"]
         .as_str()
@@ -187,4 +204,38 @@ pub fn admin_run(
     confirm_profile: Option<&str>,
 ) -> Result<serde_json::Value> {
     wait_job(&admin_start(profile, operation, confirm_profile)?)
+}
+
+pub fn migration_read(
+    profile: &str,
+    migration: backup_migrate::Request,
+) -> Result<serde_json::Value> {
+    anyhow::ensure!(!migration.is_job(), "Use a background migration job");
+    let response = local_request(AdminRequest {
+        version: 1,
+        profile: profile.into(),
+        operation: migration.operation().into(),
+        confirm_profile: None,
+        configuration: configuration_file(&Store::default()),
+        restore: None,
+        migration: Some(migration),
+    })?;
+    Ok(response["result"].clone())
+}
+pub fn migration_start(profile: &str, migration: backup_migrate::Request) -> Result<String> {
+    anyhow::ensure!(migration.is_job(), "Migration request is read-only");
+    let response = local_request(AdminRequest {
+        version: 1,
+        profile: profile.into(),
+        operation: migration.operation().into(),
+        confirm_profile: None,
+        configuration: configuration_file(&Store::default()),
+        restore: None,
+        migration: Some(migration),
+    })?;
+    let id = response["job"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Migration returned no job ID"))?;
+    valid_id(id)?;
+    Ok(id.into())
 }

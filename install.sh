@@ -5,8 +5,10 @@ if [[ ${1:-} != --skip-build ]]; then cargo build --release --locked --workspace
 bin="${NYX_BIN_DIR:-$HOME/.local/bin}"
 share="${XDG_DATA_HOME:-$HOME/.local/share}"
 config="${XDG_CONFIG_HOME:-$HOME/.config}"
-mkdir -p "$bin" "$share/applications" "$share/icons/hicolor/scalable/apps" "$share/dbus-1/services" "$config/systemd/user"
+mkdir -p "$bin" "$share/applications" "$share/icons/hicolor/scalable/apps" "$share/dbus-1/services" "$share/nyx-backup" "$config/systemd/user"
 for name in nyx-backup nyx-backupctl nyx-backupd; do install -m755 "${CARGO_TARGET_DIR:-target}/release/$name" "$bin/$name"; done
+install -m755 data/nyx-backup-setup "$bin/nyx-backup-setup"
+install -m644 data/setup-contract-v1.schema.json "$share/nyx-backup/"
 install -m644 data/io.github.design_nexus.nyx.Backup.desktop "$share/applications/"
 install -m644 data/io.github.design_nexus.nyx.Backup.svg "$share/icons/hicolor/scalable/apps/"
 # Avoid interpreting installation paths as sed replacement expressions.

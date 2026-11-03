@@ -8,6 +8,7 @@ backup-core.workspace = true
 backup-system.workspace = true
 backup-engine.workspace = true
 backup-restore.workspace = true
+backup-migrate.workspace = true
 backup-service.workspace = true
 nyx-core = { workspace = true, features = ["gtk"] }
 nyx-sync.workspace = true

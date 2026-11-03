@@ -1,0 +1,317 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "format": {
+      "const": "nyx-backup-setup"
+    },
+    "version": {
+      "const": 1
+    },
+    "id": {
+      "type": "string"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "created": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "profile": {
+      "type": "string"
+    },
+    "snapshot": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "source": {
+      "$ref": "#/$defs/inventory"
+    },
+    "source_attested": {
+      "type": "boolean"
+    },
+    "target": {
+      "$ref": "#/$defs/inventory"
+    },
+    "target_hardware": {
+      "type": "string"
+    },
+    "packages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "source_version": {
+            "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "action": {
+            "enum": [
+              "install",
+              "review_hardware",
+              "review_foreign",
+              "dependency_only",
+              "review_platform",
+              "already_installed",
+              "review_repository",
+              "review_inventory",
+              "review_unavailable"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "source_version",
+          "origin",
+          "action",
+          "reason"
+        ]
+      }
+    },
+    "held_files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "reason"
+        ]
+      }
+    },
+    "hardware_changes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "restore_plan": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "format",
+    "version",
+    "id",
+    "digest",
+    "created",
+    "profile",
+    "snapshot",
+    "source",
+    "source_attested",
+    "target",
+    "target_hardware",
+    "packages",
+    "held_files",
+    "hardware_changes",
+    "restore_plan",
+    "warnings"
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/design-nexus/nyx-backup/blob/main/data/setup-contract-v1.schema.json",
+  "title": "Nyx Backup Setup handoff v1",
+  "$comment": "Runtime validation additionally checks paths, identities, target binding, digest and current package eligibility. Digest is not a signature.",
+  "$defs": {
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "explicit": {
+          "type": "boolean"
+        },
+        "origin": {
+          "enum": [
+            "native",
+            "foreign"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "explicit",
+        "origin"
+      ]
+    },
+    "hardware": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "architecture": {
+          "type": "string"
+        },
+        "cpu_vendor": {
+          "type": "string"
+        },
+        "system_vendor": {
+          "type": "string"
+        },
+        "product": {
+          "type": "string"
+        },
+        "gpus": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "vendor": {
+                "type": "string"
+              },
+              "device": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "vendor",
+              "device"
+            ]
+          }
+        },
+        "displays": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "connector": {
+                "type": "string"
+              },
+              "modes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "connector",
+              "modes"
+            ]
+          }
+        },
+        "monitor_format": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "architecture",
+        "cpu_vendor",
+        "system_vendor",
+        "product",
+        "gpus",
+        "displays",
+        "monitor_format"
+      ]
+    },
+    "inventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "captured": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "os_id": {
+          "type": "string"
+        },
+        "home": {
+          "type": "string"
+        },
+        "config": {
+          "type": "string"
+        },
+        "hardware": {
+          "$ref": "#/$defs/hardware"
+        },
+        "packages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/package"
+          }
+        },
+        "flatpaks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "application": {
+                "type": "string"
+              },
+              "branch": {
+                "type": "string"
+              },
+              "architecture": {
+                "type": "string"
+              },
+              "origin": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "application",
+              "branch",
+              "architecture",
+              "origin"
+            ]
+          }
+        },
+        "missing": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "version",
+        "captured",
+        "os_id",
+        "home",
+        "config",
+        "hardware",
+        "packages",
+        "flatpaks",
+        "missing"
+      ]
+    }
+  }
+}

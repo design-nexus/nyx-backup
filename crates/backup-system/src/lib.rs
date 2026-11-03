@@ -413,6 +413,8 @@ pub fn metadata() -> serde_json::Value {
             Err(_) => v["missing"].as_array_mut().unwrap().push(name.into()),
         }
     }
+    v["migration"] =
+        serde_json::to_value(migration_inventory::capture()).unwrap_or(serde_json::Value::Null);
     v
 }
 pub fn schedule(store: &Store, p: &Profile, enable: bool) -> Result<()> {
@@ -499,3 +501,5 @@ pub fn notify(success: bool) {
         .stderr(Stdio::null())
         .status();
 }
+
+pub mod migration_inventory;

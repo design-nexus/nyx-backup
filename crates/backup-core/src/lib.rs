@@ -420,3 +420,5 @@ pub fn health(store: &Store) -> Result<Health> {
             .map(|j| j.message.clone()),
     })
 }
+
+pub mod migration;

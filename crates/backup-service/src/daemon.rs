@@ -36,6 +36,7 @@ impl Api {
         c: &Connection,
         require_approved: bool,
         restore: Option<backup_restore::Request>,
+        migration: Option<backup_migrate::Request>,
     ) -> zbus::fdo::Result<String> {
         let config = self.store.load().map_err(failure)?;
         let p = config.profile(id).map_err(failure)?.clone();
@@ -72,13 +73,19 @@ impl Api {
                 }
             };
             emit(&job);
-            let result = match restore {
-                Some(request) => backup_restore::execute_locked(
+            let result = if let Some(request) = migration {
+                backup_migrate::execute_locked(
                     check, &store, &config, &p, request, cancel, &mut job, emit,
-                ),
-                None => backup_engine::execute_locked(
-                    check, &store, &config, &p, &operation, cancel, &mut job, emit,
-                ),
+                )
+            } else {
+                match restore {
+                    Some(request) => backup_restore::execute_locked(
+                        check, &store, &config, &p, request, cancel, &mut job, emit,
+                    ),
+                    None => backup_engine::execute_locked(
+                        check, &store, &config, &p, &operation, cancel, &mut job, emit,
+                    ),
+                }
             };
             if let Err(e) = result {
                 job.state = JobState::Failed;
@@ -180,7 +187,7 @@ impl Api {
                 "Operation is not exposed by this API".into(),
             ));
         }
-        self.launch(id, operation, c, true, None)
+        self.launch(id, operation, c, true, None, None)
     }
     async fn cancel(
         &self,
@@ -214,7 +221,7 @@ async fn handle_admin(
         stream.peer_cred()?.uid() == unsafe { libc::geteuid() },
         "Same-user access required"
     );
-    let mut reader = tokio::io::BufReader::new(stream.take(512 * 1024));
+    let mut reader = tokio::io::BufReader::new(stream.take(8 * 1024 * 1024));
     let mut line = String::new();
     tokio::time::timeout(
         std::time::Duration::from_secs(5),
@@ -228,6 +235,21 @@ async fn handle_admin(
             request.configuration == backup_service::configuration_file(&api.store),
             "Client and service use different configurations; refusing repository administration"
         );
+        if let Some(migration) = &request.migration {
+            if !migration.is_job() {
+                let store = api.store.clone();
+                let profile = request.profile.clone();
+                let migration = migration.clone();
+                let value =
+                    tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
+                        let config = store.load()?;
+                        let p = config.profile(&profile)?;
+                        backup_migrate::read(&store, &config, p, &migration)
+                    })
+                    .await??;
+                return Ok::<_, anyhow::Error>(serde_json::json!({"version":1,"result":value}));
+            }
+        }
         if let Some(restore) = &request.restore {
             if !restore.is_job() {
                 let store = api.store.clone();
@@ -249,6 +271,7 @@ async fn handle_admin(
             c,
             false,
             request.restore,
+            request.migration,
         )?;
         Ok(serde_json::json!({"version":1,"job":id}))
     }
