@@ -16,9 +16,9 @@ anyhow.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 gtk = { package = "gtk4", version = "0.11", features = ["v4_18"] }
-nyx-ui = { git = "https://github.com/design-nexus/nyx-design.git", rev = "d2398b346b6bc414cc031b0a08a1b2a9a0f6ee2e" }
-nyx-theme = { git = "https://github.com/design-nexus/nyx-design.git", rev = "d2398b346b6bc414cc031b0a08a1b2a9a0f6ee2e" }
-nyx-icons = { git = "https://github.com/design-nexus/nyx-design.git", rev = "d2398b346b6bc414cc031b0a08a1b2a9a0f6ee2e" }
+nyx-ui = { git = "https://github.com/design-nexus/nyx-design.git", rev = "40db521bab468d54f18f65c6aabd7fc8533d6a4d" }
+nyx-theme = { git = "https://github.com/design-nexus/nyx-design.git", rev = "40db521bab468d54f18f65c6aabd7fc8533d6a4d" }
+nyx-icons = { git = "https://github.com/design-nexus/nyx-design.git", rev = "40db521bab468d54f18f65c6aabd7fc8533d6a4d" }
 
 [features]
 ui-review = []
