@@ -15,12 +15,6 @@ pub fn build(app: &gtk::Application) -> Rc<Ui> {
         .build();
     window.add_css_class("backup-window");
     window.set_size_request(640, 440);
-    let overlay = gtk::Overlay::new();
-    let outer = w::vbox(0);
-    outer.add_css_class("window-frame");
-    overlay.set_child(Some(&outer));
-    window.set_child(Some(&overlay));
-    crate::forms::attach(&overlay, &window);
 
     let header = chrome::app_header(&window, APP_ID, "Backup");
     let views = gtk::Stack::new();
@@ -43,8 +37,10 @@ pub fn build(app: &gtk::Application) -> Rc<Ui> {
     switch.add_css_class("view-switch");
     header.center.append(&switch);
     header.end.append(&actions);
-    outer.append(&header.root);
-    outer.append(&views);
+    let frame = nyx_ui::frame::AppFrame::new(&header.root);
+    frame.set_page(&views);
+    let overlay = frame.install(&window);
+    crate::forms::attach(&overlay, &window);
 
     let backups = crate::backups::View::new();
     let restore = crate::restore_ui::View::new();
