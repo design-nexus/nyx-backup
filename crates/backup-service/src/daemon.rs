@@ -515,6 +515,9 @@ async fn main() -> anyhow::Result<()> {
     backup_core::init();
     let store = Store::default();
     backup_engine::reconcile(&store)?;
+    if let Err(e) = backup_system::repair_schedules() {
+        eprintln!("nyx-backupd: couldn't update schedules: {e:#}");
+    }
     let active = Arc::new(Mutex::new(None));
     let api = Api { store, active };
     let connection = zbus::connection::Builder::session()

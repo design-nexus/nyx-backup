@@ -519,7 +519,7 @@ pub fn schedule(store: &Store, p: &Profile, enable: bool) -> Result<()> {
     c.args(["calendar", "--", calendar]);
     checked(c, "Calendar validation")?;
     let dir = nyx_core::paths::config_home().join("systemd/user");
-    let ctl = std::env::current_exe()?.with_file_name("nyx-backupctl");
+    let ctl = ctl_path()?;
     ensure!(
         !ctl.to_string_lossy().contains(['\n', '\r', '%', '"', '\\']),
         "Unsupported installation path"
@@ -558,6 +558,84 @@ fn unit_file(path: &Path, text: String) -> Result<()> {
     nyx_core::cmd::atomic_write(path, text)?;
     Ok(())
 }
+
+/// The `nyx-backupctl` a schedule runs. On NixOS the running program is in the Nix
+/// store, which the next garbage collection after an update removes, so the schedule
+/// names the system's or the user's profile link to it instead.
+fn ctl_path() -> Result<PathBuf> {
+    let here = std::env::current_exe()?.with_file_name("nyx-backupctl");
+    if !here.starts_with("/nix/store") {
+        return Ok(here);
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let state = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home.as_ref().map(|h| h.join(".local/state")));
+    let mut bins = vec![PathBuf::from("/run/current-system/sw/bin")];
+    if let Ok(user) = std::env::var("USER") {
+        bins.push(PathBuf::from(format!("/etc/profiles/per-user/{user}/bin")));
+    }
+    bins.extend(home.map(|h| h.join(".nix-profile/bin")));
+    bins.extend(state.map(|s| s.join("nix/profile/bin")));
+    Ok(bins
+        .into_iter()
+        .map(|b| b.join("nyx-backupctl"))
+        .find(|p| p.exists())
+        .unwrap_or(here))
+}
+
+/// Points schedules written by earlier versions, whose `ExecStart` names a program in
+/// the Nix store, at `ctl_path()`. Returns how many were rewritten.
+pub fn repair_schedules() -> Result<usize> {
+    let dir = nyx_core::paths::config_home().join("systemd/user");
+    let ctl = ctl_path()?;
+    if ctl.starts_with("/nix/store") {
+        return Ok(0);
+    }
+    let mut fixed = 0;
+    for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !(name.starts_with("nyx-backup-") && name.ends_with(".service")) {
+            continue;
+        }
+        let text = fs::read_to_string(&path)?;
+        let Some(new) = repoint(&text, &ctl) else {
+            continue;
+        };
+        unit_file(&path, new)?;
+        fixed += 1;
+    }
+    if fixed > 0 {
+        let mut c = clean_command("systemctl");
+        c.args(["--user", "daemon-reload"]);
+        checked(c, "Reload schedules")?;
+    }
+    Ok(fixed)
+}
+
+/// `text` with an `ExecStart="/nix/store/…/nyx-backupctl"` line pointed at `ctl`.
+fn repoint(text: &str, ctl: &Path) -> Option<String> {
+    let mut changed = false;
+    let lines: Vec<String> = text
+        .lines()
+        .map(|l| {
+            match l
+                .strip_prefix("ExecStart=\"")
+                .and_then(|r| r.split_once('"'))
+            {
+                Some((old, rest))
+                    if old.starts_with("/nix/store/") && old.ends_with("/nyx-backupctl") =>
+                {
+                    changed = true;
+                    format!("ExecStart=\"{}\"{rest}", ctl.display())
+                }
+                _ => l.to_string(),
+            }
+        })
+        .collect();
+    changed.then(|| lines.join("\n") + "\n")
+}
 pub fn schedules() -> serde_json::Value {
     let mut c = clean_command("systemctl");
     c.args([
@@ -593,3 +671,31 @@ pub mod migration_inventory;
 
 pub mod cloud;
 pub use cloud::{setup_s3, validate_rclone_config};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schedules_leave_the_nix_store() {
+        let unit = "[Unit]\nDescription=Nyx Backup profile p\n[Service]\nType=oneshot\nExecStart=\"/nix/store/abc-nyx-backup-0.1.0/bin/nyx-backupctl\" backup p --wait\n";
+        let new = repoint(unit, Path::new("/run/current-system/sw/bin/nyx-backupctl")).unwrap();
+        assert!(
+            new.contains(
+                "ExecStart=\"/run/current-system/sw/bin/nyx-backupctl\" backup p --wait\n"
+            )
+        );
+        assert!(new.starts_with("[Unit]\nDescription=Nyx Backup profile p\n"));
+        assert_eq!(
+            repoint(&new, Path::new("/elsewhere/nyx-backupctl")),
+            None,
+            "already outside the store"
+        );
+        let local = unit.replace("/nix/store/abc-nyx-backup-0.1.0/bin", "/home/u/.local/bin");
+        assert_eq!(
+            repoint(&local, Path::new("/x/nyx-backupctl")),
+            None,
+            "Arch installs keep their path"
+        );
+    }
+}
