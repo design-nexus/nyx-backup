@@ -15,8 +15,8 @@ toml = "1"
 uuid = { version = "1", features = ["v4"] }
 libc = "0.2"
 fs2 = "0.4"
-nyx-core = { git = "https://github.com/design-nexus/nyx-core.git", rev = "918729504918ec344b3a853a5ce0ea2c9dbb7b5f", default-features = false }
-nyx-sync = { git = "https://github.com/design-nexus/nyx-core.git", rev = "918729504918ec344b3a853a5ce0ea2c9dbb7b5f", default-features = false }
+nyx-core = { git = "https://github.com/design-nexus/nyx-core.git", rev = "32f0c5e154fc44c763b8ecd80d35a3b298723afa", default-features = false }
+nyx-sync = { git = "https://github.com/design-nexus/nyx-core.git", rev = "32f0c5e154fc44c763b8ecd80d35a3b298723afa", default-features = false }
 backup-core = { path = "crates/backup-core" }
 backup-system = { path = "crates/backup-system" }
 backup-engine = { path = "crates/backup-engine" }
