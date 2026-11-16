@@ -179,41 +179,43 @@ pub fn setup(ui: &Rc<Ui>) {
         let ui = ui.clone();
         Box::new(move || f(&ui))
     };
-    let m = menu(
-        "More restore actions",
-        vec![
-            ("Restore settings files…", false, item(dotfiles)),
-            (
-                "Restore receipts and rollback…",
-                false,
-                item(|ui| {
-                    if let Some(p) = current(ui) {
-                        receipts(ui, p);
-                    }
-                }),
-            ),
-            (
-                "Migration bundles…",
-                false,
-                item(|ui| {
-                    if let Some(p) = current(ui) {
-                        crate::migration_ui::bundles(ui, p);
-                    }
-                }),
-            ),
-            ("-", false, Box::new(|| {})),
-            (
-                "This computer's inventory",
-                false,
-                item(crate::migration_ui::inventory),
-            ),
-            (
-                "Offline disk recovery…",
-                false,
-                item(crate::recovery_ui::show),
-            ),
-        ],
-    );
+    let mut actions: Vec<(&str, bool, Box<dyn Fn()>)> = vec![
+        ("Restore settings files…", false, item(dotfiles)),
+        (
+            "Restore receipts and rollback…",
+            false,
+            item(|ui| {
+                if let Some(p) = current(ui) {
+                    receipts(ui, p);
+                }
+            }),
+        ),
+        (
+            "Migration bundles…",
+            false,
+            item(|ui| {
+                if let Some(p) = current(ui) {
+                    crate::migration_ui::bundles(ui, p);
+                }
+            }),
+        ),
+        ("-", false, Box::new(|| {})),
+        (
+            "This computer's inventory",
+            false,
+            item(crate::migration_ui::inventory),
+        ),
+    ];
+    // The boot kit is an Arch initramfs; NyxOS recovers whole disks with NyxOS Recovery
+    // and its system generations instead.
+    if !std::path::Path::new("/etc/NIXOS").exists() {
+        actions.push((
+            "Offline disk recovery…",
+            false,
+            item(crate::recovery_ui::show),
+        ));
+    }
+    let m = menu("More restore actions", actions);
     v.toolbar.append(&m);
 }
 

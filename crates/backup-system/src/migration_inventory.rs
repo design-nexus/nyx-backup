@@ -125,6 +125,11 @@ pub fn capture() -> Inventory {
                 .into(),
             });
         }
+    } else if std::path::Path::new("/etc/NIXOS").exists() {
+        missing.push(
+            "NyxOS packages come from the system configuration and the Store, so they're not inventoried: install apps from the Store"
+                .into(),
+        );
     } else {
         missing.push("Native/foreign package inventory unavailable (pacman read queries)".into());
     }

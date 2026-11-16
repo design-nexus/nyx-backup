@@ -223,6 +223,7 @@ pub fn package_plan(
     source.packages.iter().map(|p|{let(action,reason)=if hardware_package(&p.name){("review_hardware","Keep the target installation's kernel, firmware and drivers; review this hardware package separately")}
  else if p.origin=="foreign"{("review_foreign","Foreign/local/AUR builds are inventoried; Setup never executes source builds automatically")}
  else if !p.explicit {("dependency_only","Dependency inventory retained; the target package manager resolves dependencies")}
+ else if [source.os_id.as_str(), target.os_id.as_str()].iter().any(|id| ["nixos", "nyxos"].contains(id)) {("review_platform","Manual on NyxOS: install it from the Store")}
  else if !compatible {("review_platform","Automatic package handoff requires matching Arch/Omarchy platform and architecture")}
  else if !inventory_known {("review_inventory","Target installed-package inventory is unavailable; repair it before handing packages to Setup")}
  else if installed.contains(p.name.as_str()){("already_installed","No downgrade or source-version pinning")}
@@ -671,6 +672,17 @@ mod tests {
         assert_eq!(decisions[2].action, "review_foreign");
         assert_eq!(decisions[3].action, "dependency_only");
         assert_eq!(decisions[4].action, "review_unavailable");
+    }
+    #[test]
+    fn nyxos_handoff_is_manual() {
+        let mut source = inventory("x86_64");
+        source.packages = vec![package("git", "native", true)];
+        let mut target = inventory("x86_64");
+        target.os_id = "nixos".into();
+        let available = std::collections::HashSet::from(["git".into()]);
+        let d = &package_plan(&source, &target, Some(&available))[0];
+        assert_eq!(d.action, "review_platform");
+        assert!(d.reason.contains("Store"), "{}", d.reason);
     }
     #[test]
     fn architecture_and_missing_database_block_handoff() {

@@ -302,7 +302,12 @@ fn restic(repo: &Path, secret: &[u8]) -> Result<Command> {
     output.write_all(secret)?;
     output.write_all(b"\n")?;
     drop(output);
-    let mut c = Command::new("/usr/bin/restic");
+    // Fixed places, never $PATH: Arch's, then NixOS's system profile.
+    let restic = ["/usr/bin/restic", "/run/current-system/sw/bin/restic"]
+        .into_iter()
+        .find(|p| std::path::Path::new(p).is_file())
+        .context("Restic isn't installed")?;
+    let mut c = Command::new(restic);
     for (k, _) in std::env::vars() {
         if k.starts_with("RESTIC_") || k.starts_with("RCLONE_") {
             c.env_remove(k);
