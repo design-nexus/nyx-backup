@@ -3,6 +3,7 @@
 Uses an extracted official Samba package in a private user/mount namespace; only loopback is selected.
 """
 import json,os,pathlib,signal,socket,subprocess,sys,tempfile,time,shutil
+import shutil;REAL_RESTIC=shutil.which('restic') or '/usr/bin/restic'  # Arch's /usr/bin, NixOS's profile
 REPO=pathlib.Path(__file__).resolve().parents[1]
 if len(sys.argv)==1:
  root=pathlib.Path(tempfile.mkdtemp(prefix='nyx-smb-smoke-'));env=os.environ.copy();env['NYX_SMB_ROOT']=str(root)
@@ -36,7 +37,7 @@ with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]
 # No credentials or alternate server is passed through environment values.
 (root/'bin').mkdir();wrapper=root/'bin/rclone'
 wrapper.write_text(chr(10).join(['#!/usr/bin/python3','import os,sys,json,pathlib',f'root=pathlib.Path({str(root)!r})',"with (root/'rclone-calls.jsonl').open('a') as f:f.write(json.dumps(sys.argv[1:])+chr(10))",f"os.execv('/usr/bin/rclone',['rclone','--smb-port','{port}','--log-level','ERROR','--log-file',str(root/'native-errors.log')]+sys.argv[1:])",'']));wrapper.chmod(0o700);os.environ['PATH']=str(root/'bin')+os.pathsep+os.environ['PATH']
-restic_wrapper=root/'bin/restic';restic_wrapper.write_text(chr(10).join(['#!/bin/sh',f'exec /usr/bin/restic "$@" 2>> {root}/native-restic.log','']));restic_wrapper.chmod(0o700)
+restic_wrapper=root/'bin/restic';restic_wrapper.write_text(chr(10).join(['#!/bin/sh',f'exec {REAL_RESTIC} "$@" 2>> {root}/native-restic.log','']));restic_wrapper.chmod(0o700)
 share=root/'share';(share/'restic').mkdir(parents=True);source=root/'source';source.mkdir();(source/'example.txt').write_text('initial SMB fixture\n');(source/'example.txt').chmod(0o640)
 # Use Samba's real server with a private single-user passdb; no host config is read.
 smbd=REPO/'target/qualification-tools/samba/usr/bin/smbd'

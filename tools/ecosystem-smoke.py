@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Private-bus, signed loopback S3, grant boundary, GitHub-stub and timing qualification."""
 import base64,copy,json,os,pathlib,socket,subprocess,sys,tempfile,time
+import shutil;REAL_RESTIC=shutil.which('restic') or '/usr/bin/restic'  # Arch's /usr/bin, NixOS's profile
 REPO=pathlib.Path(__file__).resolve().parents[1]
 if len(sys.argv)==1:
  root=pathlib.Path(tempfile.mkdtemp(prefix='nyx-ecosystem-'));env=os.environ.copy();env['NYX_ECOSYSTEM_ROOT']=str(root)
@@ -30,7 +31,7 @@ print('HTTP/2.0 '+str(status)+' Status\\nContent-Type: application/json\\n\\n'+j
  (root/'bin/restic').write_text(f'''#!{sys.executable}
 import os,pathlib,sys,time
 if pathlib.Path({str(root/'stall')!r}).exists() and 'backup' in sys.argv[1:]:time.sleep(60)
-os.execv('/usr/bin/restic',['restic']+sys.argv[1:])
+os.execv({REAL_RESTIC!r},['restic']+sys.argv[1:])
 ''');(root/'bin/restic').chmod(0o700)
  activation=root/'data/dbus-1/services';activation.mkdir(parents=True);(activation/'io.github.design_nexus.nyx.Backup1.service').write_text(f'[D-BUS Service]\nName=io.github.design_nexus.nyx.Backup1\nExec={REPO}/target/release/nyx-backupd\n')
  raise SystemExit(subprocess.call(['dbus-run-session','--','/usr/bin/python3',__file__,'inner'],env=env))

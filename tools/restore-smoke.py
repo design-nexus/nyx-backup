@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Phase 2 native Restic qualification with a private bus, keyring and home."""
 import json,os,pathlib,subprocess,sys,tempfile,time,stat,signal,shlex
+import shutil;REAL_RESTIC=shutil.which('restic') or '/usr/bin/restic'  # Arch's /usr/bin, NixOS's profile
 repo=pathlib.Path(__file__).resolve().parents[1]
 if len(sys.argv)==1:
  root=pathlib.Path(tempfile.mkdtemp(prefix='nyx-restore-smoke-'));env=os.environ.copy();env['NYX_RESTORE_ROOT']=str(root)
@@ -18,7 +19,7 @@ for argument in "$@"; do
   wait "$child"
  fi
 done
-exec /usr/bin/restic "$@"
+exec {REAL_RESTIC} "$@"
 '''
  (root/'bin/restic').write_text(wrapper);(root/'bin/restic').chmod(0o700)
  activation=root/'data/dbus-1/services';activation.mkdir(parents=True)
