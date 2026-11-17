@@ -8,6 +8,8 @@ The window is a compact floating Nyx 2.0 window (760 × 560; the installer adds 
 
 ## Install and develop
 
+On NyxOS, Backup comes with the system. On Omarchy:
+
 Requires Linux, Rust (2024 edition), GTK4 ≥4.18, Restic, Rclone, `secret-tool`, a session Secret Service, D-Bus and systemd user services. SSH supplies SFTP authentication; NFS mounting requires an administrator's existing user-mountable fstab entry. No privileged desktop service, setuid helper or lingering is installed. Offline disk recovery requires booting its separate root environment.
 
 ```sh
